@@ -157,6 +157,7 @@ async function processHtmlFiles(cssAst) {
         const bodyContentForConversion = $('body').html();
         const bodyBlockHtml = await convertHtmlToBlockSyntax(bodyContentForConversion, cssAst, 'body');
 
+
         const templateFileName = htmlFile;
         const outputFilePath = path.join(baseOutputDir, 'templates', templateFileName);
         await fs.writeFile(outputFilePath, bodyBlockHtml);
@@ -171,144 +172,154 @@ async function processHtmlFiles(cssAst) {
   }
 }
 
-async function convertHtmlToBlockSyntax(htmlContent, cssAst, context = 'body') {
-    const $ = cheerio.load(htmlContent, { decodeEntities: false }, false); 
-    const $root = context === 'body' ? $('body') : $;
+async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 'body') {
+    // Determine if the content is a fragment or a full body
+    const isFragment = context !== 'body';
+    const $ = cheerio.load(htmlContentToConvert, { decodeEntities: false }, isFragment); 
+    
+    try {
+        const $root = isFragment ? $ : $('body');
 
-    $root.children().each(async (index, element) => {
-        const $element = $(element);
-        let processed = false; 
-        let blockName = ''; // For logging
+        // Process direct children first in specific order
+        // Use a for...of loop to handle async operations within the loop correctly
+        for (const element of $root.children().toArray()) {
+            const $element = $(element);
+            let processed = false; 
+            let blockName = ''; 
 
-        if ($element.is('img') && !$element.closest('figure.wp-block-image').length) {
-            blockName = 'wp:image';
-            console.log(`INFO: Converting IMG (src: ${$element.attr('src')}) to ${blockName}.`);
-            const src = $element.attr('src') || '';
-            const alt = $element.attr('alt') || '';
-            const attrs = {"id":0,"sizeSlug":"large","linkDestination":"none"}; // Minimal attributes for wp:image
-            console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
-            $element.replaceWith(`<!-- wp:image ${JSON.stringify(attrs)} --><figure class="wp-block-image size-large"><img src="${src}" alt="${alt}"/></figure><!-- /wp:image -->`);
-            processed = true;
-        }
-        else if ($element.is('li')) {
-            blockName = 'wp:list-item';
-            const listItemContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
-            // No specific attributes for list-item itself usually, styles go on parent or inner blocks
-            console.log(`DEBUG: Applying to ${blockName}: (content only)`);
-            $element.replaceWith(`<!-- wp:list-item -->${listItemContent}<!-- /wp:list-item -->`);
-            processed = true;
-        }
-        else if ($element.is('ul') || $element.is('ol')) {
-            blockName = 'wp:list';
-            const attrs = {};
-            if ($element.is('ol')) attrs.ordered = true;
-            console.log(`INFO: Converting ${$element.prop('tagName').toUpperCase()} to ${blockName} ${attrs.ordered ? '(ordered)' : ''}.`);
-            
-            const listContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
-            const attributeString = Object.keys(attrs).length > 0 ? ` ${JSON.stringify(attrs)}` : '';
-            console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
-            $element.replaceWith(`<!-- wp:list${attributeString} -->${listContent}<!-- /wp:list -->`);
-            processed = true;
-        }
-        else if ($element.is('p')) {
-            blockName = 'wp:paragraph';
-            const attrs = {};
-            const styleResults = findElementStyles($element, cssAst);
-            if (styleResults.styles['text-align']) attrs.textAlign = styleResults.styles['text-align'];
-            if (styleResults.directStyles && Object.keys(styleResults.directStyles).length > 0) attrs.style = styleResults.directStyles;
-            if (styleResults.generatedClassName) attrs.className = styleResults.generatedClassName;
-            const textColorValue = styleResults.styles['color'];
-            if (textColorValue) {
-                const textColorSlug = mapColorToPaletteSlug(textColorValue, globalThemeJsonData.settings.color.palette);
-                if (textColorSlug) attrs.textColor = textColorSlug;
+            if ($element.is('img') && !$element.closest('figure.wp-block-image').length) {
+                blockName = 'wp:image';
+                console.log(`INFO: Converting IMG (src: ${$element.attr('src')}) to ${blockName}.`);
+                const src = $element.attr('src') || '';
+                const alt = $element.attr('alt') || '';
+                const attrs = {"id":0,"sizeSlug":"large","linkDestination":"none"}; 
+                console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
+                $element.replaceWith(`<!-- wp:image ${JSON.stringify(attrs)} --><figure class="wp-block-image size-large"><img src="${src}" alt="${alt}"/></figure><!-- /wp:image -->`);
+                processed = true;
             }
-            const backgroundColorValue = styleResults.styles['background-color'];
-            if (backgroundColorValue) {
-                const bgColorSlug = mapColorToPaletteSlug(backgroundColorValue, globalThemeJsonData.settings.color.palette);
-                if (bgColorSlug) attrs.backgroundColor = bgColorSlug;
+            else if ($element.is('li')) {
+                blockName = 'wp:list-item';
+                const listItemContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
+                console.log(`DEBUG: Applying to ${blockName}: (content only)`);
+                $element.replaceWith(`<!-- wp:list-item -->${listItemContent}<!-- /wp:list-item -->`);
+                processed = true;
             }
-            const attributeString = Object.keys(attrs).length > 0 ? ` ${JSON.stringify(attrs)}` : '';
-            const pContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
-            console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
-            $element.replaceWith(`<!-- wp:paragraph${attributeString} -->${pContent}<!-- /wp:paragraph -->`);
-            processed = true;
-        }
-        else if ($element.is('h1, h2, h3, h4, h5, h6')) {
-            blockName = 'wp:heading';
-            const level = parseInt($element.prop('tagName').substring(1));
-            const attrs = { level: level };
-            const styleResults = findElementStyles($element, cssAst);
-            if (styleResults.styles['text-align']) attrs.textAlign = styleResults.styles['text-align'];
-            if (styleResults.directStyles && Object.keys(styleResults.directStyles).length > 0) attrs.style = styleResults.directStyles;
-            if (styleResults.generatedClassName) attrs.className = styleResults.generatedClassName;
-            const textColorValue = styleResults.styles['color'];
-            if (textColorValue) {
-                const textColorSlug = mapColorToPaletteSlug(textColorValue, globalThemeJsonData.settings.color.palette);
-                if (textColorSlug) attrs.textColor = textColorSlug;
+            else if ($element.is('ul') || $element.is('ol')) {
+                blockName = 'wp:list';
+                const attrs = {};
+                if ($element.is('ol')) attrs.ordered = true;
+                console.log(`INFO: Converting ${$element.prop('tagName').toUpperCase()} to ${blockName} ${attrs.ordered ? '(ordered)' : ''}.`);
+                
+                const listContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
+                const attributeString = Object.keys(attrs).length > 0 ? ` ${JSON.stringify(attrs)}` : '';
+                console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
+                $element.replaceWith(`<!-- wp:list${attributeString} -->${listContent}<!-- /wp:list -->`);
+                processed = true;
             }
-            const backgroundColorValue = styleResults.styles['background-color'];
-            if (backgroundColorValue) {
-                const bgColorSlug = mapColorToPaletteSlug(backgroundColorValue, globalThemeJsonData.settings.color.palette);
-                if (bgColorSlug) attrs.backgroundColor = bgColorSlug;
+            else if ($element.is('p')) {
+                blockName = 'wp:paragraph';
+                const attrs = {};
+                const styleResults = findElementStyles($element, cssAst);
+                if (styleResults.styles['text-align']) attrs.textAlign = styleResults.styles['text-align'];
+                if (styleResults.directStyles && Object.keys(styleResults.directStyles).length > 0) attrs.style = styleResults.directStyles;
+                if (styleResults.generatedClassName) attrs.className = styleResults.generatedClassName;
+                const textColorValue = styleResults.styles['color'];
+                if (textColorValue) {
+                    const textColorSlug = mapColorToPaletteSlug(textColorValue, globalThemeJsonData.settings.color.palette);
+                    if (textColorSlug) attrs.textColor = textColorSlug;
+                }
+                const backgroundColorValue = styleResults.styles['background-color'];
+                if (backgroundColorValue) {
+                    const bgColorSlug = mapColorToPaletteSlug(backgroundColorValue, globalThemeJsonData.settings.color.palette);
+                    if (bgColorSlug) attrs.backgroundColor = bgColorSlug;
+                }
+                const attributeString = Object.keys(attrs).length > 0 ? ` ${JSON.stringify(attrs)}` : '';
+                const pContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
+                console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
+                $element.replaceWith(`<!-- wp:paragraph${attributeString} -->${pContent}<!-- /wp:paragraph -->`);
+                processed = true;
             }
-            const attributeString = ` ${JSON.stringify(attrs)}`;
-            const hContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
-            console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
-            $element.replaceWith(`<!-- wp:heading${attributeString} -->${hContent}<!-- /wp:heading -->`);
-            processed = true;
-        }
-        else if ($element.is('div')) {
-            blockName = 'wp:group';
-            console.log(`INFO: Converting DIV (id: ${$element.attr('id') || 'none'}, class: ${$element.attr('class') || 'none'}) to ${blockName}.`);
-            const groupAttrs = { tagName: 'div' };
-            const styleResults = findElementStyles($element, cssAst);
-            if (styleResults.directStyles && Object.keys(styleResults.directStyles).length > 0) groupAttrs.style = styleResults.directStyles;
-            if (styleResults.generatedClassName) groupAttrs.className = (groupAttrs.className || '') + ` ${styleResults.generatedClassName}`;
-            
-            const backgroundColorValue = styleResults.styles['background-color'];
-            if (backgroundColorValue) {
-                const bgColorSlug = mapColorToPaletteSlug(backgroundColorValue, globalThemeJsonData.settings.color.palette);
-                if (bgColorSlug) groupAttrs.backgroundColor = bgColorSlug;
-                else {
-                    let classNameForBg = styleResults.generatedClassName;
-                    if (!classNameForBg && !styleResults.directStyles?.['background-color']) { // Avoid adding to existing custom class if it was for other props
-                        customClassCounter++; classNameForBg = `custom-style-${customClassCounter}`;
-                        groupAttrs.className = (groupAttrs.className || '') + ` ${classNameForBg}`;
+            else if ($element.is('h1, h2, h3, h4, h5, h6')) {
+                blockName = 'wp:heading';
+                const level = parseInt($element.prop('tagName').substring(1));
+                const attrs = { level: level };
+                const styleResults = findElementStyles($element, cssAst);
+                if (styleResults.styles['text-align']) attrs.textAlign = styleResults.styles['text-align'];
+                if (styleResults.directStyles && Object.keys(styleResults.directStyles).length > 0) attrs.style = styleResults.directStyles;
+                if (styleResults.generatedClassName) attrs.className = styleResults.generatedClassName;
+                const textColorValue = styleResults.styles['color'];
+                if (textColorValue) {
+                    const textColorSlug = mapColorToPaletteSlug(textColorValue, globalThemeJsonData.settings.color.palette);
+                    if (textColorSlug) attrs.textColor = textColorSlug;
+                }
+                const backgroundColorValue = styleResults.styles['background-color'];
+                if (backgroundColorValue) {
+                    const bgColorSlug = mapColorToPaletteSlug(backgroundColorValue, globalThemeJsonData.settings.color.palette);
+                    if (bgColorSlug) attrs.backgroundColor = bgColorSlug;
+                }
+                const attributeString = ` ${JSON.stringify(attrs)}`;
+                const hContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
+                console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
+                $element.replaceWith(`<!-- wp:heading${attributeString} -->${hContent}<!-- /wp:heading -->`);
+                processed = true;
+            }
+            else if ($element.is('div')) {
+                blockName = 'wp:group';
+                console.log(`INFO: Converting DIV (id: ${$element.attr('id') || 'none'}, class: ${$element.attr('class') || 'none'}) to ${blockName}.`);
+                const groupAttrs = { tagName: 'div' };
+                const styleResults = findElementStyles($element, cssAst);
+                if (styleResults.directStyles && Object.keys(styleResults.directStyles).length > 0) groupAttrs.style = styleResults.directStyles;
+                if (styleResults.generatedClassName) groupAttrs.className = (groupAttrs.className || '') + ` ${styleResults.generatedClassName}`;
+                
+                const backgroundColorValue = styleResults.styles['background-color'];
+                if (backgroundColorValue) {
+                    const bgColorSlug = mapColorToPaletteSlug(backgroundColorValue, globalThemeJsonData.settings.color.palette);
+                    if (bgColorSlug) groupAttrs.backgroundColor = bgColorSlug;
+                    else {
+                        let classNameForBg = styleResults.generatedClassName;
+                        if (!classNameForBg && !styleResults.directStyles?.['background-color']) {
+                            customClassCounter++; classNameForBg = `custom-style-${customClassCounter}`;
+                            groupAttrs.className = (groupAttrs.className || '') + ` ${classNameForBg}`;
+                        }
+                        if (classNameForBg) customCssRulesForStyleSheet.push(`.${classNameForBg.trim().split(' ').pop()} { background-color: ${backgroundColorValue}; }`);
                     }
-                    if (classNameForBg) customCssRulesForStyleSheet.push(`.${classNameForBg.trim().split(' ').pop()} { background-color: ${backgroundColorValue}; }`);
                 }
-            }
-            const textColorValue = styleResults.styles['color'];
-            if (textColorValue) {
-                const textColorSlug = mapColorToPaletteSlug(textColorValue, globalThemeJsonData.settings.color.palette);
-                if (textColorSlug) groupAttrs.textColor = textColorSlug;
-                else {
-                    let classNameForColor = styleResults.generatedClassName;
-                     if (!classNameForColor && !styleResults.directStyles?.['color']) {
-                         customClassCounter++; classNameForColor = `custom-style-${customClassCounter}`;
-                         groupAttrs.className = (groupAttrs.className || '') + ` ${classNameForColor}`;
-                     }
-                    if(classNameForColor) customCssRulesForStyleSheet.push(`.${classNameForColor.trim().split(' ').pop()} { color: ${textColorValue}; }`);
+                const textColorValue = styleResults.styles['color'];
+                if (textColorValue) {
+                    const textColorSlug = mapColorToPaletteSlug(textColorValue, globalThemeJsonData.settings.color.palette);
+                    if (textColorSlug) groupAttrs.textColor = textColorSlug;
+                    else {
+                        let classNameForColor = styleResults.generatedClassName;
+                         if (!classNameForColor && !styleResults.directStyles?.['color']) {
+                             customClassCounter++; classNameForColor = `custom-style-${customClassCounter}`;
+                             groupAttrs.className = (groupAttrs.className || '') + ` ${classNameForColor}`;
+                         }
+                        if(classNameForColor) customCssRulesForStyleSheet.push(`.${classNameForColor.trim().split(' ').pop()} { color: ${textColorValue}; }`);
+                    }
                 }
+                if (groupAttrs.className) groupAttrs.className = groupAttrs.className.trim();
+
+                const divContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
+                const groupAttributeString = Object.keys(groupAttrs).length > 0 ? ` ${JSON.stringify(groupAttrs)}` : '';
+                console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(groupAttrs)}`);
+                $element.replaceWith(`<!-- wp:group${groupAttributeString} -->${divContent}<!-- /wp:group -->`);
+                processed = true;
             }
-            if (groupAttrs.className) groupAttrs.className = groupAttrs.className.trim();
+            else if ($element.is('a') && !$element.parent().is('p, h1, h2, h3, h4, h5, h6, li')) {
+                blockName = 'wp:paragraph';
+                const pContent = await convertHtmlToBlockSyntax($.html($element), cssAst, 'fragment');
+                console.log(`DEBUG: Applying to ${blockName} (wrapping 'a'): (content only)`);
+                $element.replaceWith(`<!-- wp:paragraph -->${pContent}<!-- /wp:paragraph -->`);
+                processed = true;
+            }
+        } // End of for...of loop
 
-            const divContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
-            const groupAttributeString = Object.keys(groupAttrs).length > 0 ? ` ${JSON.stringify(groupAttrs)}` : '';
-            console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(groupAttrs)}`);
-            $element.replaceWith(`<!-- wp:group${groupAttributeString} -->${divContent}<!-- /wp:group -->`);
-            processed = true;
-        }
-        else if ($element.is('a') && !$element.parent().is('p, h1, h2, h3, h4, h5, h6, li')) {
-            blockName = 'wp:paragraph'; // Wrapping standalone 'a' in paragraph
-            const pContent = await convertHtmlToBlockSyntax($.html($element), cssAst, 'fragment');
-            console.log(`DEBUG: Applying to ${blockName} (wrapping 'a'): (content only)`);
-            $element.replaceWith(`<!-- wp:paragraph -->${pContent}<!-- /wp:paragraph -->`);
-            processed = true;
-        }
-    });
+        return isFragment ? $root.html() : $('body').html();
 
-    return context === 'body' ? $('body').html() : $root.html();
+    } catch (err) {
+        console.error(`ERROR in convertHtmlToBlockSyntax (context: ${context}): ${err.message}`, err.stack);
+        return `<!-- HTML Conversion Error in context '${context}': ${err.message} -->`;
+    }
 }
 
 
@@ -419,7 +430,7 @@ function findElementStyles($element, cssAst) {
 async function identifyAndProcessCommonParts(headerOrFooterCandidates, totalFiles, filesWithElement, commonalityThreshold, partType, cssAst) {
     const originalHtml = findMostFrequent(headerOrFooterCandidates, totalFiles, filesWithElement, commonalityThreshold);
     let blockHtml = null;
-    let originalTagName = partType; // Default to 'header' or 'footer'
+    let originalTagName = partType; 
 
     if (originalHtml) {
         const $temp = cheerio.load(originalHtml, { decodeEntities: false }, false);
@@ -542,7 +553,7 @@ async function updateThemeJsonWithCssAst(cssAst) {
   console.log("\n--- Updating theme.json with extracted CSS styles ---");
   const themeJsonPath = path.join(baseOutputDir, 'theme.json');
   try {
-    if (!globalThemeJsonData) {
+    if (!globalThemeJsonData) { // Should be loaded by setupThemeDirectory
         const themeJsonContent = await fs.readFile(themeJsonPath, 'utf8');
         globalThemeJsonData = JSON.parse(themeJsonContent);
     }
