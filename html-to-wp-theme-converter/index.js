@@ -24,20 +24,15 @@ if (!inputDir) {
   console.error('Error: Please provide an input HTML directory path as the first command-line argument.');
   process.exit(1);
 }
-// Note: cssDir is optional for the script to run, but CSS processing will be skipped if not provided.
 
 async function setupThemeDirectory() {
   try {
     console.log(`Attempting to create theme directory at: ${baseOutputDir}`);
-    // Remove existing directory to ensure a clean slate
     await fs.remove(baseOutputDir);
     console.log(`Removed existing directory (if any): ${baseOutputDir}`);
-    
-    // Create the main theme directory
     await fs.ensureDir(baseOutputDir);
     console.log(`Created theme directory: ${baseOutputDir}`);
 
-    // Create style.css
     const themeName = "Converted WP Theme";
     const textDomain = "converted-wp-theme";
     const styleCssContent = `/*
@@ -55,48 +50,53 @@ Tags: block-styles, full-site-editing, accessibility-ready
     await fs.writeFile(path.join(baseOutputDir, 'style.css'), styleCssContent);
     console.log(`Created style.css in ${baseOutputDir}`);
 
-    // Create index.php
-    const packageName = themeName.replace(/\s+/g, ''); // e.g., ConvertedWPTheme
+    const packageName = themeName.replace(/\s+/g, '');
     const indexPhpContent = `<?php
 /**
  * Main template file.
- *
  * @package ${packageName}
  */
-
 block_template_part( 'index' );`;
     await fs.writeFile(path.join(baseOutputDir, 'index.php'), indexPhpContent);
     console.log(`Created index.php in ${baseOutputDir}`);
 
-    // Create theme.json
     const themeJsonContent = `{
   "version": 2,
-  "$schema": "https://schemas.wp.org/wp/6.3/theme.json"
+  "$schema": "https://schemas.wp.org/wp/6.3/theme.json",
+  "settings": {
+    "layout": {"contentSize": "800px", "wideSize": "1200px", "useRootPaddingAwareAlignments": true},
+    "spacing": {"padding": true, "margin": true}
+  },
+  "styles": {
+    "spacing": {"padding": {"top": "0", "right": "0", "bottom": "0", "left": "0"}}
+  }
 }`;
     await fs.writeFile(path.join(baseOutputDir, 'theme.json'), themeJsonContent);
-    console.log(`Created theme.json in ${baseOutputDir}`);
-
-    // Create templates/ and parts/ directories
+    console.log('INFO: Initial theme.json created with FSE layout settings (contentSize, wideSize, useRootPaddingAwareAlignments).');
+    try {
+        globalThemeJsonData = JSON.parse(themeJsonContent);
+        console.log(`Created theme.json in ${baseOutputDir} and loaded into globalThemeJsonData`);
+    } catch (e) {
+        console.error('Error parsing initial theme.json content:', e.message);
+    }
+    
     await fs.ensureDir(path.join(baseOutputDir, 'templates'));
     console.log(`Created templates/ directory in ${baseOutputDir}`);
     await fs.ensureDir(path.join(baseOutputDir, 'parts'));
     console.log(`Created parts/ directory in ${baseOutputDir}`);
-
   } catch (err) {
     console.error('Error setting up theme directory:', err.message);
     process.exit(1);
   }
 }
 
-async function processHtmlFiles(cssAst) { // Accept cssAst
+async function processHtmlFiles(cssAst) {
   try {
-    // Check if the provided path is a directory
     const stats = await fs.stat(inputDir);
     if (!stats.isDirectory()) {
       console.error(`Error: The provided path "${inputDir}" is not a directory.`);
       process.exit(1);
     }
-
     const files = await fs.readdir(inputDir);
     const htmlFiles = files.filter(file => path.extname(file).toLowerCase() === '.html');
 
@@ -105,18 +105,9 @@ async function processHtmlFiles(cssAst) { // Accept cssAst
       return;
     }
 
-    console.log(`Found HTML files in ${inputDir}:`);
-    let headerCandidates = {}; // Store HTML string -> count
-    let footerCandidates = {}; // Store HTML string -> count
-    let filesWithHeader = 0;
-    let filesWithFooter = 0;
+    let headerCandidates = {}, footerCandidates = {};
+    let filesWithHeader = 0, filesWithFooter = 0;
     const totalFiles = htmlFiles.length;
-
-    if (totalFiles === 0) {
-      console.log(`No HTML files found in directory: ${inputDir}`);
-      await setupThemeDirectory(); // Still setup empty theme
-      return;
-    }
 
     console.log(`\n--- Pass 1: Collecting Header/Footer Candidates from ${totalFiles} files ---`);
     for (const htmlFile of htmlFiles) {
@@ -124,19 +115,15 @@ async function processHtmlFiles(cssAst) { // Accept cssAst
       try {
         const content = await fs.readFile(filePath, 'utf8');
         const $ = cheerio.load(content, { decodeEntities: false });
-
         const $body = $('body');
         const $headerElement = $body.children('header').first();
         if ($headerElement.length) {
-          const headerHtml = $.html($headerElement);
-          headerCandidates[headerHtml] = (headerCandidates[headerHtml] || 0) + 1;
+          headerCandidates[$.html($headerElement)] = (headerCandidates[$.html($headerElement)] || 0) + 1;
           filesWithHeader++;
         }
-
         const $footerElement = $body.children('footer').last();
         if ($footerElement.length) {
-          const footerHtml = $.html($footerElement);
-          footerCandidates[footerHtml] = (footerCandidates[footerHtml] || 0) + 1;
+          footerCandidates[$.html($footerElement)] = (footerCandidates[$.html($footerElement)] || 0) + 1;
           filesWithFooter++;
         }
       } catch (err) {
@@ -144,396 +131,351 @@ async function processHtmlFiles(cssAst) { // Accept cssAst
       }
     }
 
-    await identifyAndProcessCommonParts(headerCandidates, footerCandidates, totalFiles, filesWithHeader, filesWithFooter, cssAst); // Pass cssAst
+    await identifyAndProcessCommonParts(headerCandidates, footerCandidates, totalFiles, filesWithHeader, filesWithFooter, cssAst);
     
-    // Setup theme directory structure (must be done after common parts are identified and potentially saved)
-    await setupThemeDirectory();
-
-    console.log('\n--- Pass 2: Generating Templates and Inserting Template Part Tags (with style mapping) ---');
+    console.log('\n--- Pass 2: Generating Templates and Inserting Template Part Tags ---');
     for (const htmlFile of htmlFiles) {
       const filePath = path.join(inputDir, htmlFile);
       try {
-        let content = await fs.readFile(filePath, 'utf8'); // Original full HTML content
+        let content = await fs.readFile(filePath, 'utf8');
         let $ = cheerio.load(content, { decodeEntities: false });
+        let $body = $('body');
 
-        // Replace common header HTML with template part tag
         if (commonHeaderOriginalHtml) {
-          const $body = $('body');
-          const $headerElement = $body.children(headerTagName).first(); // Use detected tag name
+          const $headerElement = $body.children(headerTagName).first();
           if ($headerElement.length && $.html($headerElement) === commonHeaderOriginalHtml) {
             $headerElement.replaceWith(`<!-- wp:template-part {"slug":"header","tagName":"${headerTagName}"} /-->`);
-            content = $.html(); // Get the modified full HTML
-            $ = cheerio.load(content, { decodeEntities: false }); // Reload Cheerio with modified content
-            console.log(`Replaced header in ${htmlFile} with template part tag.`);
           }
         }
-
-        // Replace common footer HTML with template part tag
         if (commonFooterOriginalHtml) {
-          const $body = $('body');
-          const $footerElement = $body.children(footerTagName).last(); // Use detected tag name
+          const $footerElement = $body.children(footerTagName).last();
           if ($footerElement.length && $.html($footerElement) === commonFooterOriginalHtml) {
             $footerElement.replaceWith(`<!-- wp:template-part {"slug":"footer","tagName":"${footerTagName}"} /-->`);
-            content = $.html(); // Get the modified full HTML
-            console.log(`Replaced footer in ${htmlFile} with template part tag.`);
           }
         }
         
-        // Convert the (potentially modified) body content to block syntax
-        const bodyBlockHtml = await convertHtmlToBlockSyntax(content, cssAst); // Pass cssAst
+        const bodyContentForConversion = $('body').html();
+        const bodyBlockHtml = await convertHtmlToBlockSyntax(bodyContentForConversion, cssAst, 'body');
 
         const templateFileName = htmlFile;
         const outputFilePath = path.join(baseOutputDir, 'templates', templateFileName);
         await fs.writeFile(outputFilePath, bodyBlockHtml);
         console.log(`Saved final template to ${outputFilePath}`);
-
       } catch (err) {
         console.error(`Error processing file ${htmlFile} for final template generation:`, err.message);
       }
     }
-
   } catch (err) {
-    if (err.code === 'ENOENT') {
-      console.error(`Error: Directory not found at path: ${inputDir}`);
-    } else {
-      console.error('Error processing files:', err.message);
-    }
+    console.error('Error processing files:', err.message);
     process.exit(1);
   }
 }
 
-// Refactored block conversion logic
-async function convertHtmlToBlockSyntax(fullHtmlContent, cssAst) { // Accept cssAst
-    const $ = cheerio.load(fullHtmlContent, { decodeEntities: false });
+async function convertHtmlToBlockSyntax(htmlContent, cssAst, context = 'body') {
+    const $ = cheerio.load(htmlContent, { decodeEntities: false }, false); 
+    const $root = context === 'body' ? $('body') : $;
 
-    // If template part tags are already there, we want to preserve them.
-    // The block conversion logic below operates on specific HTML tags (img, p, etc.)
-    // It should not affect the wp:template-part comments if they are at the root of the body.
-
-    // Process IMG elements
-    $('body img').each((index, element) => { // Target only images within body
+    $root.children().each(async (index, element) => {
         const $element = $(element);
-        if ($element.closest('figure.wp-block-image').length > 0) return;
-        const src = $element.attr('src') || '';
-        const alt = $element.attr('alt') || '';
-        const wpImageBlock = `<!-- wp:image {"id":0,"sizeSlug":"large","linkDestination":"none"} --><figure class="wp-block-image size-large"><img src="${src}" alt="${alt}"/></figure><!-- /wp:image -->`;
-        $element.replaceWith(wpImageBlock);
+        let processed = false; 
+        let blockName = ''; // For logging
+
+        if ($element.is('img') && !$element.closest('figure.wp-block-image').length) {
+            blockName = 'wp:image';
+            console.log(`INFO: Converting IMG (src: ${$element.attr('src')}) to ${blockName}.`);
+            const src = $element.attr('src') || '';
+            const alt = $element.attr('alt') || '';
+            const attrs = {"id":0,"sizeSlug":"large","linkDestination":"none"}; // Minimal attributes for wp:image
+            console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
+            $element.replaceWith(`<!-- wp:image ${JSON.stringify(attrs)} --><figure class="wp-block-image size-large"><img src="${src}" alt="${alt}"/></figure><!-- /wp:image -->`);
+            processed = true;
+        }
+        else if ($element.is('li')) {
+            blockName = 'wp:list-item';
+            const listItemContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
+            // No specific attributes for list-item itself usually, styles go on parent or inner blocks
+            console.log(`DEBUG: Applying to ${blockName}: (content only)`);
+            $element.replaceWith(`<!-- wp:list-item -->${listItemContent}<!-- /wp:list-item -->`);
+            processed = true;
+        }
+        else if ($element.is('ul') || $element.is('ol')) {
+            blockName = 'wp:list';
+            const attrs = {};
+            if ($element.is('ol')) attrs.ordered = true;
+            console.log(`INFO: Converting ${$element.prop('tagName').toUpperCase()} to ${blockName} ${attrs.ordered ? '(ordered)' : ''}.`);
+            
+            const listContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
+            const attributeString = Object.keys(attrs).length > 0 ? ` ${JSON.stringify(attrs)}` : '';
+            console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
+            $element.replaceWith(`<!-- wp:list${attributeString} -->${listContent}<!-- /wp:list -->`);
+            processed = true;
+        }
+        else if ($element.is('p')) {
+            blockName = 'wp:paragraph';
+            const attrs = {};
+            const styleResults = findElementStyles($element, cssAst);
+            if (styleResults.styles['text-align']) attrs.textAlign = styleResults.styles['text-align'];
+            if (styleResults.directStyles && Object.keys(styleResults.directStyles).length > 0) attrs.style = styleResults.directStyles;
+            if (styleResults.generatedClassName) attrs.className = styleResults.generatedClassName;
+            const textColorValue = styleResults.styles['color'];
+            if (textColorValue) {
+                const textColorSlug = mapColorToPaletteSlug(textColorValue, globalThemeJsonData.settings.color.palette);
+                if (textColorSlug) attrs.textColor = textColorSlug;
+            }
+            const backgroundColorValue = styleResults.styles['background-color'];
+            if (backgroundColorValue) {
+                const bgColorSlug = mapColorToPaletteSlug(backgroundColorValue, globalThemeJsonData.settings.color.palette);
+                if (bgColorSlug) attrs.backgroundColor = bgColorSlug;
+            }
+            const attributeString = Object.keys(attrs).length > 0 ? ` ${JSON.stringify(attrs)}` : '';
+            const pContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
+            console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
+            $element.replaceWith(`<!-- wp:paragraph${attributeString} -->${pContent}<!-- /wp:paragraph -->`);
+            processed = true;
+        }
+        else if ($element.is('h1, h2, h3, h4, h5, h6')) {
+            blockName = 'wp:heading';
+            const level = parseInt($element.prop('tagName').substring(1));
+            const attrs = { level: level };
+            const styleResults = findElementStyles($element, cssAst);
+            if (styleResults.styles['text-align']) attrs.textAlign = styleResults.styles['text-align'];
+            if (styleResults.directStyles && Object.keys(styleResults.directStyles).length > 0) attrs.style = styleResults.directStyles;
+            if (styleResults.generatedClassName) attrs.className = styleResults.generatedClassName;
+            const textColorValue = styleResults.styles['color'];
+            if (textColorValue) {
+                const textColorSlug = mapColorToPaletteSlug(textColorValue, globalThemeJsonData.settings.color.palette);
+                if (textColorSlug) attrs.textColor = textColorSlug;
+            }
+            const backgroundColorValue = styleResults.styles['background-color'];
+            if (backgroundColorValue) {
+                const bgColorSlug = mapColorToPaletteSlug(backgroundColorValue, globalThemeJsonData.settings.color.palette);
+                if (bgColorSlug) attrs.backgroundColor = bgColorSlug;
+            }
+            const attributeString = ` ${JSON.stringify(attrs)}`;
+            const hContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
+            console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
+            $element.replaceWith(`<!-- wp:heading${attributeString} -->${hContent}<!-- /wp:heading -->`);
+            processed = true;
+        }
+        else if ($element.is('div')) {
+            blockName = 'wp:group';
+            console.log(`INFO: Converting DIV (id: ${$element.attr('id') || 'none'}, class: ${$element.attr('class') || 'none'}) to ${blockName}.`);
+            const groupAttrs = { tagName: 'div' };
+            const styleResults = findElementStyles($element, cssAst);
+            if (styleResults.directStyles && Object.keys(styleResults.directStyles).length > 0) groupAttrs.style = styleResults.directStyles;
+            if (styleResults.generatedClassName) groupAttrs.className = (groupAttrs.className || '') + ` ${styleResults.generatedClassName}`;
+            
+            const backgroundColorValue = styleResults.styles['background-color'];
+            if (backgroundColorValue) {
+                const bgColorSlug = mapColorToPaletteSlug(backgroundColorValue, globalThemeJsonData.settings.color.palette);
+                if (bgColorSlug) groupAttrs.backgroundColor = bgColorSlug;
+                else {
+                    let classNameForBg = styleResults.generatedClassName;
+                    if (!classNameForBg && !styleResults.directStyles?.['background-color']) { // Avoid adding to existing custom class if it was for other props
+                        customClassCounter++; classNameForBg = `custom-style-${customClassCounter}`;
+                        groupAttrs.className = (groupAttrs.className || '') + ` ${classNameForBg}`;
+                    }
+                    if (classNameForBg) customCssRulesForStyleSheet.push(`.${classNameForBg.trim().split(' ').pop()} { background-color: ${backgroundColorValue}; }`);
+                }
+            }
+            const textColorValue = styleResults.styles['color'];
+            if (textColorValue) {
+                const textColorSlug = mapColorToPaletteSlug(textColorValue, globalThemeJsonData.settings.color.palette);
+                if (textColorSlug) groupAttrs.textColor = textColorSlug;
+                else {
+                    let classNameForColor = styleResults.generatedClassName;
+                     if (!classNameForColor && !styleResults.directStyles?.['color']) {
+                         customClassCounter++; classNameForColor = `custom-style-${customClassCounter}`;
+                         groupAttrs.className = (groupAttrs.className || '') + ` ${classNameForColor}`;
+                     }
+                    if(classNameForColor) customCssRulesForStyleSheet.push(`.${classNameForColor.trim().split(' ').pop()} { color: ${textColorValue}; }`);
+                }
+            }
+            if (groupAttrs.className) groupAttrs.className = groupAttrs.className.trim();
+
+            const divContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
+            const groupAttributeString = Object.keys(groupAttrs).length > 0 ? ` ${JSON.stringify(groupAttrs)}` : '';
+            console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(groupAttrs)}`);
+            $element.replaceWith(`<!-- wp:group${groupAttributeString} -->${divContent}<!-- /wp:group -->`);
+            processed = true;
+        }
+        else if ($element.is('a') && !$element.parent().is('p, h1, h2, h3, h4, h5, h6, li')) {
+            blockName = 'wp:paragraph'; // Wrapping standalone 'a' in paragraph
+            const pContent = await convertHtmlToBlockSyntax($.html($element), cssAst, 'fragment');
+            console.log(`DEBUG: Applying to ${blockName} (wrapping 'a'): (content only)`);
+            $element.replaceWith(`<!-- wp:paragraph -->${pContent}<!-- /wp:paragraph -->`);
+            processed = true;
+        }
     });
 
-    // Process LI elements
-    $('body li').each((index, element) => {
-        const $element = $(element);
-        if (!$element.parent().is('ul') && !$element.parent().is('ol')) return;
-        const prevSib = $element[0].prevSibling;
-        const nextSib = $element[0].nextSibling;
-        if (prevSib && prevSib.type === 'comment' && prevSib.data.trim() === 'wp:list-item' &&
-            nextSib && nextSib.type === 'comment' && nextSib.data.trim() === '/wp:list-item') {
-            return; 
-        }
-        const currentContent = $element.html();
-        if (currentContent.startsWith('<!-- wp:list-item -->') && currentContent.endsWith('<!-- /wp:list-item -->')) {
-            return;
-        }
-        const originalOuterHtml = $.html($element);
-        $element.replaceWith(`<!-- wp:list-item -->${originalOuterHtml}<!-- /wp:list-item -->`);
-    });
-
-    // Process UL elements
-    $('body ul').each((index, element) => {
-        const $element = $(element);
-        const prevSib = $element[0].prevSibling;
-        const nextSib = $element[0].nextSibling;
-        if (prevSib && prevSib.type === 'comment' && prevSib.data.trim() === 'wp:list' &&
-            nextSib && nextSib.type === 'comment' && nextSib.data.trim() === '/wp:list') {
-            return; 
-        }
-        $element.replaceWith(`<!-- wp:list -->${$.html($element)}<!-- /wp:list -->`);
-    });
-
-    // Process OL elements
-    $('body ol').each((index, element) => {
-        const $element = $(element);
-        const prevSib = $element[0].prevSibling;
-        const nextSib = $element[0].nextSibling;
-        if (prevSib && prevSib.type === 'comment' && prevSib.data.trim() === 'wp:list {"ordered":true}' &&
-            nextSib && nextSib.type === 'comment' && nextSib.data.trim() === '/wp:list') {
-            return; 
-        }
-        $element.replaceWith(`<!-- wp:list {"ordered":true} -->${$.html($element)}<!-- /wp:list -->`);
-    });
-
-    // Process P elements
-    $('body p').each((index, element) => {
-        const $element = $(element);
-        if ($element.closest('li').length > 0) return; 
-
-        const attrs = {}; // Renamed to avoid conflict if attributes is used elsewhere
-        const styles = findElementStyles($element, cssAst);
-
-        if (styles['text-align']) {
-            attrs.textAlign = styles['text-align'];
-        }
-        
-        const textColorValue = styles['color'];
-        if (textColorValue) {
-            const textColorSlug = mapColorToPaletteSlug(textColorValue, globalThemeJsonData.settings.color.palette);
-            if (textColorSlug) {
-                attrs.textColor = textColorSlug;
-                console.log(`Added textColor '${textColorSlug}' to paragraph (id: ${$element.attr('id') || 'none'}, class: ${$element.attr('class') || 'none'}).`);
-            }
-        }
-
-        const backgroundColorValue = styles['background-color'];
-        if (backgroundColorValue) {
-            const bgColorSlug = mapColorToPaletteSlug(backgroundColorValue, globalThemeJsonData.settings.color.palette);
-            if (bgColorSlug) {
-                attrs.backgroundColor = bgColorSlug;
-                console.log(`Added backgroundColor '${bgColorSlug}' to paragraph (id: ${$element.attr('id') || 'none'}, class: ${$element.attr('class') || 'none'}).`);
-            }
-        }
-
-        const attributeString = Object.keys(attrs).length > 0 ? ` ${JSON.stringify(attrs)}` : '';
-        const originalHtmlContent = $.html($element); 
-
-        // Check if already wrapped (important due to DOM modifications)
-        const prevSib = $element[0].prevSibling;
-        const nextSib = $element[0].nextSibling;
-        if (prevSib && prevSib.type === 'comment' && prevSib.data.trim() === `wp:paragraph${attributesString ? '' : ' '}`.trim() && // Complicated check due to attributes
-            nextSib && nextSib.type === 'comment' && nextSib.data.trim() === '/wp:paragraph') {
-             // This check needs to be more robust if attributes can change order or have different spacing
-            return; 
-        }
-        
-        $element.replaceWith(`<!-- wp:paragraph${attributesString} -->${originalHtmlContent}<!-- /wp:paragraph -->`);
-    });
-
-    // Process H1-H6 elements
-    $('body h1, body h2, body h3, body h4, body h5, body h6').each((index, element) => {
-        const $element = $(element);
-        const tagName = $element.prop('tagName').toLowerCase();
-        const level = parseInt(tagName.substring(1)); // Ensure level is an int
-        
-        const attrs = { level: level }; // Renamed to avoid conflict
-        const styles = findElementStyles($element, cssAst);
-
-        if (styles['text-align']) {
-            attrs.textAlign = styles['text-align'];
-        }
-
-        const textColorValue = styles['color'];
-        if (textColorValue) {
-            const textColorSlug = mapColorToPaletteSlug(textColorValue, globalThemeJsonData.settings.color.palette);
-            if (textColorSlug) {
-                attrs.textColor = textColorSlug;
-                console.log(`Added textColor '${textColorSlug}' to ${tagName.toUpperCase()} (id: ${$element.attr('id') || 'none'}, class: ${$element.attr('class') || 'none'}).`);
-            }
-        }
-
-        const backgroundColorValue = styles['background-color'];
-        if (backgroundColorValue) {
-            const bgColorSlug = mapColorToPaletteSlug(backgroundColorValue, globalThemeJsonData.settings.color.palette);
-            if (bgColorSlug) {
-                attrs.backgroundColor = bgColorSlug;
-                console.log(`Added backgroundColor '${bgColorSlug}' to ${tagName.toUpperCase()} (id: ${$element.attr('id') || 'none'}, class: ${$element.attr('class') || 'none'}).`);
-            }
-        }
-        
-        const attributeString = ` ${JSON.stringify(attrs)}`; // Headings always have 'level'
-        const originalHtmlContent = $.html($element);
-
-        // Check if already wrapped
-        const prevSib = $element[0].prevSibling;
-        const nextSib = $element[0].nextSibling;
-         // Similar complex check for attributes needed here if we want to avoid re-processing.
-         // For now, assuming this processing pass is the primary one for these attributes.
-        if (prevSib && prevSib.type === 'comment' && prevSib.data.trim().startsWith('wp:heading') &&
-            nextSib && nextSib.type === 'comment' && nextSib.data.trim() === '/wp:heading') {
-            // More robust check would compare attributes if re-processing is a concern
-            // return; 
-        }
-
-        $element.replaceWith(`<!-- wp:heading${attributesString} -->${originalHtmlContent}<!-- /wp:heading -->`);
-    });
-    
-    // Process A elements (standalone links)
-    $('body a').each((index, element) => {
-        const $element = $(element);
-        // Check if the anchor is already part of a block that handles its content (e.g. paragraph, heading, list item)
-        // or if it's inside a wp:template-part comment (which means it's already processed as part of a common part)
-        let parentCheck = $element.parent();
-        let isInBlock = false;
-        while(parentCheck.length && parentCheck.prop('tagName')?.toLowerCase() !== 'body') {
-            const parentTagName = parentCheck.prop('tagName')?.toLowerCase();
-            if (['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'figure', 'figcaption'].includes(parentTagName)) {
-                isInBlock = true;
-                break;
-            }
-            // Check if parent is a comment node and is a wp:template-part
-            if(parentCheck[0].type === 'comment' && parentCheck[0].data?.trim().startsWith('wp:template-part')) {
-                isInBlock = true;
-                break;
-            }
-            parentCheck = parentCheck.parent();
-        }
-        if (isInBlock) return;
-
-        // If it's a direct child of body or a div (and not already wrapped), then wrap in paragraph.
-        const parentTag = $element.parent().prop('tagName')?.toLowerCase();
-        if (parentTag === 'body' || parentTag === 'div') {
-            const prevNode = $element[0].prevSibling;
-            const nextNode = $element[0].nextSibling;
-            if (!(prevNode && prevNode.type === 'comment' && prevNode.data.trim() === 'wp:paragraph' &&
-                nextNode && nextNode.type === 'comment' && nextNode.data.trim() === '/wp:paragraph')) {
-                 $element.replaceWith(`<!-- wp:paragraph -->${$.html($element)}<!-- /wp:paragraph -->`);
-            }
-        }
-    });
-    return $('body').html(); // Return only the content of the body
+    return context === 'body' ? $('body').html() : $root.html();
 }
+
 
 function findMostFrequent(items, totalSourceFiles, presenceCount, thresholdPercent = 0.75) {
     if (presenceCount === 0 || (presenceCount / totalSourceFiles) < thresholdPercent) {
-        console.log(`Presence count (${presenceCount}/${totalSourceFiles}) for this element type is below threshold (${thresholdPercent * 100}%).`);
-        return null; // Not present in enough files
+        return null;
     }
-
     let mostFrequentHtml = null;
     let maxCount = 0;
-
     for (const html in items) {
         if (items[html] > maxCount) {
             maxCount = items[html];
             mostFrequentHtml = html;
         }
     }
-
-    // Check if this most frequent item itself meets the threshold among *files that had the element*
     if (mostFrequentHtml && (maxCount / presenceCount) >= thresholdPercent) {
-        console.log(`Most frequent item (found in ${maxCount}/${presenceCount} instances) meets the threshold.`);
         return mostFrequentHtml;
-    } else {
-        if (mostFrequentHtml) {
-          console.log(`Most frequent item (found in ${maxCount}/${presenceCount} instances) does NOT meet the threshold.`);
-        } else {
-          console.log("No items found to determine frequency.");
-        }
-        return null;
     }
+    return null;
 }
 
-// Helper to find styles for a given element (simplified)
 function findElementStyles($element, cssAst) {
-    const styles = {}; // This is the line that will be matched and replaced
-    styles.unmappedStyles = []; // Initialize array for unmapped styles
-    if (!cssAst) return styles;
+    const collectedStyles = { id: {}, class: {}, tag: {} };
+    const directStyles = { spacing: { padding: {}, margin: {} }, border: {} };
+    let trulyUnmappedProperties = [];
+    let generatedClassName = null;
 
     const id = $element.attr('id');
     const classes = ($element.attr('class') || '').split(/\s+/).filter(Boolean);
+    const tagName = $element.prop('tagName')?.toLowerCase();
 
-    const targetBorderProps = [
-        'border', 'border-top', 'border-right', 'border-bottom', 'border-left',
-        'border-color', 'border-style', 'border-width',
-        'border-top-color', 'border-top-style', 'border-top-width',
-        'border-right-color', 'border-right-style', 'border-right-width',
-        'border-bottom-color', 'border-bottom-style', 'border-bottom-width',
-        'border-left-color', 'border-left-style', 'border-left-width'
-    ];
+    if (!cssAst) return { styles: {}, directStyles: {}, generatedClassName };
 
-    const targetPaddingProps = [
-        'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left'
-    ];
 
-    const targetMarginProps = [
-        'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left'
-    ];
-
-    const targetBoxShadowProps = ['box-shadow']; // New list for box-shadow
+    const spacingProperties = ['padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left'];
+    const borderProperties = ['border', 'border-top', 'border-right', 'border-bottom', 'border-left', 'border-color', 'border-style', 'border-width', 'border-top-color', 'border-top-style', 'border-top-width', 'border-right-color', 'border-right-style', 'border-right-width', 'border-bottom-color', 'border-bottom-style', 'border-bottom-width', 'border-left-color', 'border-left-style', 'border-left-width'];
+    const otherDirectlyMappable = ['box-shadow']; 
 
     cssAst.walkRules(rule => {
-        let matched = false;
-        // Check ID selector (e.g., #myId)
-        if (id && rule.selector.includes(`#${id}`)) {
-            matched = true;
-        }
-        // Check class selectors (e.g., .myClass) - very basic, matches if any class is in selector
-        if (!matched && classes.length > 0) {
-            if (classes.some(cls => rule.selector.includes(`.${cls}`))) {
-                 // This is a weak match. A stronger match would parse rule.selectors properly.
-                 // For now, we'll take it if it's a simple class selector like '.myClass'
-                if (rule.selectors.some(s => classes.includes(s.substring(1)) && s.startsWith('.') && !s.includes(' ') && !s.includes(':'))) {
-                    matched = true;
-                }
-            }
-        }
+        let specificity = null;
+        if (id && rule.selector.includes(`#${id}`)) specificity = 'id';
+        else if (classes.length > 0 && classes.some(cls => rule.selectors.some(s => s === `.${cls}` || s.startsWith(`.${cls}.`) || s.startsWith(`.${cls}:`)))) specificity = 'class';
+        else if (tagName && rule.selectors.some(s => s === tagName || s.startsWith(tagName + '.') || s.startsWith(tagName + ':'))) specificity = 'tag';
 
-        if (matched) {
+        if (specificity) {
             rule.walkDecls(decl => {
-                if (decl.prop === 'text-align') {
-                    styles['text-align'] = decl.value;
-                } else if (decl.prop === 'background-color') {
-                    styles['background-color'] = decl.value;
-                } else if (decl.prop === 'color') {
-                    styles['color'] = decl.value;
-                } else if (targetBorderProps.includes(decl.prop)) {
-                    styles.unmappedStyles.push({ property: decl.prop, value: decl.value });
-                } else if (targetPaddingProps.includes(decl.prop)) { 
-                    styles.unmappedStyles.push({ property: decl.prop, value: decl.value });
-                } else if (targetMarginProps.includes(decl.prop)) {
-                    styles.unmappedStyles.push({ property: decl.prop, value: decl.value });
-                } else if (targetBoxShadowProps.includes(decl.prop)) { // New condition for box-shadow
-                    styles.unmappedStyles.push({ property: decl.prop, value: decl.value });
+                if (!collectedStyles[specificity][decl.prop] || specificity === 'id' || (specificity === 'class' && !collectedStyles.id[decl.prop])) {
+                     collectedStyles[specificity][decl.prop] = decl.value;
                 }
-                // Add other properties to extract here later
             });
         }
     });
-    return styles;
+    
+    const finalStyles = { ...collectedStyles.tag, ...collectedStyles.class, ...collectedStyles.id };
+
+    for (const prop in finalStyles) {
+        const value = finalStyles[prop];
+        if (['text-align', 'background-color', 'color'].includes(prop)) {
+            // Handled by main block attribute mapping
+        } else if (spacingProperties.includes(prop)) {
+            const [type, side] = prop.split('-');
+            if (type === 'padding') directStyles.spacing.padding[side || 'all'] = value;
+            else if (type === 'margin') directStyles.spacing.margin[side || 'all'] = value;
+        } else if (borderProperties.includes(prop)) {
+            if (prop === 'border') {
+                const parts = value.match(/^([\d\w.]+)\s+(\w+)\s+(.+)$/);
+                if (parts) {
+                    directStyles.border.width = directStyles.border.width || parts[1];
+                    directStyles.border.style = directStyles.border.style || parts[2];
+                    directStyles.border.color = directStyles.border.color || parts[3];
+                } else trulyUnmappedProperties.push({ property: prop, value: value });
+            } else if (prop.startsWith('border-')) {
+                const subProp = prop.substring('border-'.length);
+                if (['color', 'width', 'style'].includes(subProp)) directStyles.border[subProp] = value;
+                else trulyUnmappedProperties.push({ property: prop, value: value });
+            }
+        } else if (otherDirectlyMappable.includes(prop) && prop === 'box-shadow') {
+            directStyles['boxShadow'] = value;
+        } else {
+            trulyUnmappedProperties.push({ property: prop, value: value });
+        }
+    }
+    
+    let directStylesApplied = false;
+    if (Object.keys(directStyles.spacing.padding).length > 0) { directStylesApplied = true; } else { delete directStyles.spacing.padding; }
+    if (Object.keys(directStyles.spacing.margin).length > 0) { directStylesApplied = true; } else { delete directStyles.spacing.margin; }
+    if (Object.keys(directStyles.spacing).length === 0) { delete directStyles.spacing; }
+    if (Object.keys(directStyles.border).length > 0) { directStylesApplied = true; } else { delete directStyles.border; }
+    if (directStyles.boxShadow) { directStylesApplied = true; }
+
+
+    if (directStylesApplied) {
+         console.log(`DEBUG: Mapped direct style for element (${tagName}, id: ${id || 'none'}, class: ${classes.join('.') || 'none'}) -> ${JSON.stringify(directStyles)}`);
+    }
+
+
+    if (trulyUnmappedProperties.length > 0) {
+        customClassCounter++;
+        generatedClassName = `custom-style-${customClassCounter}`;
+        const ruleString = trulyUnmappedProperties.map(style => `  ${style.property}: ${style.value};`).join('\n');
+        customCssRulesForStyleSheet.push(`.${generatedClassName} {\n${ruleString}\n}`);
+        console.log(`INFO: Generated custom class '${generatedClassName}' for element (${tagName}, id: ${id || 'none'}, class: ${classes.join('.') || 'none'}) with rules: ${ruleString}`);
+    }
+    
+    return { styles: finalStyles, directStyles, generatedClassName };
 }
 
+async function identifyAndProcessCommonParts(headerOrFooterCandidates, totalFiles, filesWithElement, commonalityThreshold, partType, cssAst) {
+    const originalHtml = findMostFrequent(headerOrFooterCandidates, totalFiles, filesWithElement, commonalityThreshold);
+    let blockHtml = null;
+    let originalTagName = partType; // Default to 'header' or 'footer'
 
-async function identifyAndProcessCommonParts(headerCandidates, footerCandidates, totalFiles, filesWithHeader, filesWithFooter, cssAst) { // Accept cssAst
-    console.log('\n--- Identifying Common Header/Footer ---');
-    const commonalityThreshold = 0.75; // 75% of files must have the element, and 75% of those must be identical.
+    if (originalHtml) {
+        const $temp = cheerio.load(originalHtml, { decodeEntities: false }, false);
+        const $rootElement = $temp.root().children().first();
+        originalTagName = $rootElement.prop('tagName')?.toLowerCase() || (partType === 'header' ? 'header' : 'footer');
+        
+        const contentHtml = $rootElement.html();
+        let processedContent = await convertHtmlToBlockSyntax(contentHtml, cssAst, 'fragment');
 
-    // Process Header
-    commonHeaderOriginalHtml = findMostFrequent(headerCandidates, totalFiles, filesWithHeader, commonalityThreshold);
-    if (commonHeaderOriginalHtml) {
-        console.log('Common header HTML identified.');
-        const $temp = cheerio.load(commonHeaderOriginalHtml);
-        headerTagName = $temp.root().children().first().prop('tagName')?.toLowerCase() || 'header';
+        const groupAttrs = { tagName: originalTagName, layout: {type: "constrained"} };
+        const styleResults = findElementStyles($rootElement, cssAst);
 
-        commonHeaderBlockHtml = await convertHtmlToBlockSyntax(`<body>${commonHeaderOriginalHtml}</body>`, cssAst); // Pass cssAst
-        const headerPartPath = path.join(baseOutputDir, 'parts', 'header.html');
+        if (styleResults.directStyles && Object.keys(styleResults.directStyles).length > 0) groupAttrs.style = styleResults.directStyles;
+        if (styleResults.generatedClassName) groupAttrs.className = styleResults.generatedClassName;
+        
+        const bgColor = styleResults.styles['background-color'];
+        if (bgColor) {
+            const slug = mapColorToPaletteSlug(bgColor, globalThemeJsonData.settings.color.palette);
+            if (slug) groupAttrs.backgroundColor = slug;
+        }
+        const textColor = styleResults.styles['color'];
+        if (textColor) {
+            const slug = mapColorToPaletteSlug(textColor, globalThemeJsonData.settings.color.palette);
+            if (slug) groupAttrs.textColor = slug;
+        }
+        
+        blockHtml = `<!-- wp:group ${JSON.stringify(groupAttrs)} -->${processedContent}<!-- /wp:group -->`;
+        
+        const partPath = path.join(baseOutputDir, 'parts', `${partType}.html`);
         await fs.ensureDir(path.join(baseOutputDir, 'parts')); 
-        await fs.writeFile(headerPartPath, commonHeaderBlockHtml);
-        console.log(`Saved common header to ${headerPartPath}`);
+        await fs.writeFile(partPath, blockHtml);
+        console.log(`INFO: Common ${partType} found. Original tag: <${originalTagName}>. Saved to parts/${partType}.html and wrapped in wp:group.`);
     } else {
-        console.log('No single common header found meeting the criteria.');
+        console.log(`INFO: No single common ${partType} found meeting the criteria.`);
     }
-
-    // Process Footer
-    commonFooterOriginalHtml = findMostFrequent(footerCandidates, totalFiles, filesWithFooter, commonalityThreshold);
-    if (commonFooterOriginalHtml) {
-        console.log('Common footer HTML identified.');
-        const $temp = cheerio.load(commonFooterOriginalHtml);
-        footerTagName = $temp.root().children().first().prop('tagName')?.toLowerCase() || 'footer';
-
-        commonFooterBlockHtml = await convertHtmlToBlockSyntax(`<body>${commonFooterOriginalHtml}</body>`, cssAst); // Pass cssAst
-        const footerPartPath = path.join(baseOutputDir, 'parts', 'footer.html');
-        await fs.ensureDir(path.join(baseOutputDir, 'parts'));
-        await fs.writeFile(footerPartPath, commonFooterBlockHtml);
-        console.log(`Saved common footer to ${footerPartPath}`);
-    } else {
-        console.log('No single common footer found meeting the criteria.');
-    }
+    return { originalHtml, blockHtml, tagName: originalTagName };
 }
+
+async function identifyAndProcessCommonParts(headerCandidates, footerCandidates, totalFiles, filesWithHeader, filesWithFooter, cssAst) {
+    const headerResult = await identifyAndProcessCommonParts(headerCandidates, totalFiles, filesWithHeader, 0.75, 'header', cssAst);
+    commonHeaderOriginalHtml = headerResult.originalHtml;
+    commonHeaderBlockHtml = headerResult.blockHtml;
+    headerTagName = headerResult.tagName;
+
+    const footerResult = await identifyAndProcessCommonParts(footerCandidates, totalFiles, filesWithFooter, 0.75, 'footer', cssAst);
+    commonFooterOriginalHtml = footerResult.originalHtml;
+    commonFooterBlockHtml = footerResult.blockHtml;
+    footerTagName = footerResult.tagName;
+}
+
 
 async function loadAndParseCss(providedCssDir) {
   if (!providedCssDir) {
-    console.log('\nNo CSS directory provided (expected as 2nd argument). Skipping CSS analysis.');
+    console.log('\nNo CSS directory provided. Skipping CSS analysis.');
     return null;
   }
-
   console.log(`\n--- Loading and Parsing CSS from: ${providedCssDir} ---`);
   try {
     const stats = await fs.stat(providedCssDir);
@@ -541,243 +483,173 @@ async function loadAndParseCss(providedCssDir) {
       console.error(`Error: The provided CSS path "${providedCssDir}" is not a directory.`);
       return null;
     }
-
     const cssFiles = (await fs.readdir(providedCssDir)).filter(file => path.extname(file).toLowerCase() === '.css');
-
     if (cssFiles.length === 0) {
       console.log(`No CSS files found in directory: ${providedCssDir}`);
       return null;
     }
-
-    console.log('Found CSS files to process:');
     let combinedCss = '';
     for (const cssFile of cssFiles) {
-      console.log(` - ${cssFile}`);
       const filePath = path.join(providedCssDir, cssFile);
-      const content = await fs.readFile(filePath, 'utf8');
-      combinedCss += content + '\n'; // Add newline to separate file contents
+      combinedCss += await fs.readFile(filePath, 'utf8') + '\n';
     }
-
-    console.log('Attempting to parse combined CSS...');
     const result = await postcss().process(combinedCss, { from: undefined });
     console.log('Successfully parsed combined CSS into AST.');
-    return result.root; // Return the PostCSS Root (AST)
+    return result.root;
   } catch (err) {
     console.error('Error loading or parsing CSS:', err.message);
-    if (err.name === 'CssSyntaxError') {
-        console.error('CSS Syntax Error Details:');
-        console.error(err.showSourceCode(true));
-    }
     return null;
   }
 }
 
 async function main() {
-  let customClassCounter = 0; // Initialize custom class counter for each run
-  // customClassCounter is global, initialized at the top.
-  // Load CSS first to make AST available globally
-  globalCssAst = await loadAndParseCss(cssDir); 
-  if (globalCssAst) {
-    console.log("\nGlobal CSS AST is available.");
-  } else {
-    console.log("\nCSS AST not generated or an error occurred during CSS processing.");
-  }
-
-  await processHtmlFiles(globalCssAst); // Process HTML, passing AST
+  await setupThemeDirectory();
+  globalCssAst = await loadAndParseCss(cssDir);
+  if (!globalCssAst) console.log("CSS AST not generated or an error occurred.");
   
-  if (globalCssAst) { // If AST was loaded, proceed to update theme.json
-    await updateThemeJsonWithCssAst(globalCssAst); 
-  } else {
-    console.log("\nSkipping theme.json update from CSS due to earlier errors or no CSS provided.");
-  }
+  await processHtmlFiles(globalCssAst);
+  
+  if (globalCssAst) await updateThemeJsonWithCssAst(globalCssAst);
+  else console.log("\nSkipping theme.json update from CSS.");
 
-  // Log collected custom CSS rules (for next step)
   if (customCssRulesForStyleSheet.length > 0) {
-    console.log("\n--- Collected Custom CSS Rules for style.css ---");
-    customCssRulesForStyleSheet.forEach(rule => console.log(rule));
+    await appendCustomStylesToStyleCss();
   }
 }
 
-async function updateThemeJsonWithCssAst(cssAst) { // cssAst is passed but globalThemeJsonData will be used
+async function appendCustomStylesToStyleCss() {
+  console.log(`INFO: Appending ${customCssRulesForStyleSheet.length} custom CSS rules to style.css.`);
+  if (customCssRulesForStyleSheet.length === 0) return;
+
+  const styleCssPath = path.join(baseOutputDir, 'style.css');
+  const customStylesHeader = "\n\n/* Custom styles from converter */\n";
+  try {
+    let existingContent = '';
+    try { existingContent = await fs.readFile(styleCssPath, 'utf8'); }
+    catch (readError) { if (readError.code !== 'ENOENT') throw readError; }
+    
+    let contentToAppend = customCssRulesForStyleSheet.join('\n');
+    if (existingContent && !existingContent.endsWith('\n')) contentToAppend = '\n' + contentToAppend;
+    
+    await fs.appendFile(styleCssPath, customStylesHeader + contentToAppend);
+    console.log(`Appended ${customCssRulesForStyleSheet.length} custom style rules to ${styleCssPath}`);
+  } catch (err) {
+    console.error('Error appending custom styles to style.css:', err.message);
+  }
+}
+
+async function updateThemeJsonWithCssAst(cssAst) {
   console.log("\n--- Updating theme.json with extracted CSS styles ---");
   const themeJsonPath = path.join(baseOutputDir, 'theme.json');
-
   try {
-    // Use globalThemeJsonData which should be populated by setupThemeDirectory or read here
-    // For safety, read again if not populated, though it should be by setupThemeDirectory
     if (!globalThemeJsonData) {
-        try {
-            const themeJsonContent = await fs.readFile(themeJsonPath, 'utf8');
-            globalThemeJsonData = JSON.parse(themeJsonContent);
-        } catch (e) {
-            if (e.code === 'ENOENT') {
-                console.log('theme.json not found, will create a new one.');
-                globalThemeJsonData = { version: 2, $schema: "https://schemas.wp.org/wp/6.3/theme.json" };
-            } else {
-                console.error('Error reading or parsing theme.json:', e.message);
-                return; 
-            }
-        }
+        const themeJsonContent = await fs.readFile(themeJsonPath, 'utf8');
+        globalThemeJsonData = JSON.parse(themeJsonContent);
     }
-    
-    // Ensure globalThemeJsonData is not null before proceeding
-    if (!globalThemeJsonData) {
-        console.error("Failed to load or initialize theme.json data.");
-        return;
-    }
-
-    // Initialize sections if not present
     globalThemeJsonData.settings = globalThemeJsonData.settings || {};
     globalThemeJsonData.settings.color = globalThemeJsonData.settings.color || {};
     globalThemeJsonData.settings.color.palette = globalThemeJsonData.settings.color.palette || [];
     globalThemeJsonData.settings.typography = globalThemeJsonData.settings.typography || {};
     globalThemeJsonData.settings.typography.fontFamilies = globalThemeJsonData.settings.typography.fontFamilies || [];
-    globalThemeJsonData.settings.typography.fontSizes = globalThemeJsonData.settings.typography.fontSizes || [];
+    // Ensure fontSizes array exists for potential future use, though not populated by current extractors
+    globalThemeJsonData.settings.typography.fontSizes = globalThemeJsonData.settings.typography.fontSizes || []; 
     globalThemeJsonData.settings.layout = globalThemeJsonData.settings.layout || {};
 
     globalThemeJsonData.styles = globalThemeJsonData.styles || {};
     globalThemeJsonData.styles.typography = globalThemeJsonData.styles.typography || {};
     globalThemeJsonData.styles.elements = globalThemeJsonData.styles.elements || {};
-
-    const elementTags = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p'];
-    elementTags.forEach(tag => {
+    ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p'].forEach(tag => {
       globalThemeJsonData.styles.elements[tag] = globalThemeJsonData.styles.elements[tag] || {};
       globalThemeJsonData.styles.elements[tag].typography = globalThemeJsonData.styles.elements[tag].typography || {};
     });
-    
-    console.log("CSS AST available, proceeding with style extraction for theme.json.");
 
-    // 1. Extract Font Families
-    const extractedFontFamilies = extractFontFamilies(cssAst); // cssAst is passed correctly
+    const extractedFontFamilies = extractFontFamilies(cssAst);
     if (extractedFontFamilies.length > 0) {
-        const existingFontFamilyStrings = globalThemeJsonData.settings.typography.fontFamilies.map(f => f.fontFamily);
+        const existingFontSlugs = new Set(globalThemeJsonData.settings.typography.fontFamilies.map(f => f.slug));
         extractedFontFamilies.forEach(font => {
-            if (!existingFontFamilyStrings.includes(font.fontFamily)) {
+            if (!existingFontSlugs.has(font.slug)) {
                 globalThemeJsonData.settings.typography.fontFamilies.push(font);
             }
         });
-        console.log(`Processed ${extractedFontFamilies.length} font families for theme.json.`);
+        console.log(`INFO: Extracted font families for theme.json: ${JSON.stringify(globalThemeJsonData.settings.typography.fontFamilies)}`);
     }
 
-    // 2. Extract Color Palette
-    const extractedColors = extractColorPalette(cssAst); // cssAst is passed
-     if (extractedColors.length > 0) {
-        const existingColorValues = globalThemeJsonData.settings.color.palette.map(c => c.color);
+    const extractedColors = extractColorPalette(cssAst);
+    if (extractedColors.length > 0) {
+        const existingColorValues = new Set(globalThemeJsonData.settings.color.palette.map(c => c.color));
         extractedColors.forEach(color => {
-            if (!existingColorValues.includes(color.color)) {
+            if (!existingColorValues.has(color.color)) {
                 globalThemeJsonData.settings.color.palette.push(color);
             }
         });
-        console.log(`Processed ${extractedColors.length} colors for theme.json palette.`);
-    }
-
-    // 3. Extract Typography Styles (Font Sizes for elements & global)
-    const { globalFontSize, elementFontSizes } = extractTypographyStyles(cssAst); // cssAst is passed
-    if (globalFontSize) {
-        globalThemeJsonData.styles.typography.fontSize = globalFontSize;
-        console.log(`Set global font size in theme.json: ${globalFontSize}`);
-    }
-    for (const tag in elementFontSizes) {
-        if (Object.hasOwnProperty.call(elementFontSizes, tag)) {
-            globalThemeJsonData.styles.elements[tag].typography.fontSize = elementFontSizes[tag];
-            console.log(`Set font size for ${tag} in theme.json: ${elementFontSizes[tag]}`);
-        }
+        console.log(`INFO: Extracted color palette for theme.json: ${JSON.stringify(globalThemeJsonData.settings.color.palette)}`);
     }
     
-    // 4. Extract Layout (Content Width)
-    const layoutSizes = extractLayoutSizes(cssAst); // cssAst is passed
-    if (layoutSizes.contentSize) {
-        globalThemeJsonData.settings.layout.contentSize = layoutSizes.contentSize;
-        console.log(`Set layout.contentSize in theme.json: ${layoutSizes.contentSize}`);
+    const { globalFontSize, elementFontSizes } = extractTypographyStyles(cssAst);
+    if (globalFontSize || Object.keys(elementFontSizes).length > 0) {
+        if (globalFontSize) globalThemeJsonData.styles.typography.fontSize = globalFontSize;
+        for (const tag in elementFontSizes) {
+            globalThemeJsonData.styles.elements[tag].typography.fontSize = elementFontSizes[tag];
+        }
+        console.log(`INFO: Applied typography styles to theme.json (globalFontSize, elementFontSizes).`);
     }
-    if (layoutSizes.wideSize) {
-        globalThemeJsonData.settings.layout.wideSize = layoutSizes.wideSize;
-        console.log(`Set layout.wideSize in theme.json: ${layoutSizes.wideSize}`);
+
+    const layoutSizes = extractLayoutSizes(cssAst);
+    if (layoutSizes.contentSize || layoutSizes.wideSize) {
+        if(layoutSizes.contentSize) globalThemeJsonData.settings.layout.contentSize = layoutSizes.contentSize;
+        if(layoutSizes.wideSize) globalThemeJsonData.settings.layout.wideSize = layoutSizes.wideSize;
+        console.log(`INFO: Applied layout sizes to theme.json (contentSize, wideSize).`);
     }
 
     await fs.writeFile(themeJsonPath, JSON.stringify(globalThemeJsonData, null, 2));
     console.log(`Successfully updated theme.json at ${themeJsonPath}`);
-
   } catch (error) {
     console.error('Error updating theme.json:', error.message);
-    if (error.stack) {
-        console.error(error.stack);
-    }
   }
 }
 
-// --- Helper functions for extraction (stubs for now) ---
 function extractFontFamilies(cssAst) {
-    const families = [];
+    const families = new Map(); 
     let counter = 1;
-    cssAst.walkRules(rule => {
-        // Prioritize body and html for global font families
-        if (rule.selector.includes('body') || rule.selector.includes('html')) {
-            rule.walkDecls('font-family', decl => {
-                const familyString = decl.value;
-                if (!families.find(f => f.fontFamily === familyString)) {
-                    families.push({
-                        fontFamily: familyString,
-                        name: `Font ${counter}`, // Simple naming
-                        slug: `font-${counter++}`
-                    });
-                }
+    cssAst.walkDecls('font-family', decl => {
+        const familyString = decl.value;
+        if (!families.has(familyString)) {
+            families.set(familyString, {
+                fontFamily: familyString, name: `Font ${counter}`, slug: `font-${counter++}`
             });
         }
     });
-    // Fallback: any font-family declaration if body/html didn't yield any
-    if (families.length === 0) {
-        cssAst.walkDecls('font-family', decl => {
-            const familyString = decl.value;
-            if (!families.find(f => f.fontFamily === familyString)) {
-                 families.push({
-                    fontFamily: familyString,
-                    name: `Font ${counter}`,
-                    slug: `font-${counter++}`
-                });
-            }
-        });
-    }
-    return families.slice(0, 5); // Limit to a few for now
+    return Array.from(families.values()).slice(0, 5);
 }
 
 function extractColorPalette(cssAst) {
-    const colors = new Set();
-    cssAst.walkDecls(decl => {
-        if (decl.prop === 'color' || decl.prop === 'background-color') {
-            // Basic regex for hex, rgb, rgba. Ignores keywords like 'red'.
-            const colorMatch = decl.value.match(/(#[0-9a-fA-F]{3,6}|rgba?\([\d\s,.]+\))/);
-            if (colorMatch) {
-                colors.add(colorMatch[0]);
+    const colors = new Map();
+    let counter = 1;
+    cssAst.walkDecls(/^(color|background-color)$/, decl => {
+        const colorMatch = decl.value.match(/(#[0-9a-fA-F]{3,6}|rgba?\([\d\s,.]+\)|hsls?\([\d\s%,.]+\))/);
+        if (colorMatch) {
+            const normalizedColor = normalizeColor(colorMatch[0]);
+            if (normalizedColor && !colors.has(normalizedColor)) {
+                colors.set(normalizedColor, {
+                    color: normalizedColor, name: `Color ${counter}`, slug: `color-${counter++}`
+                });
             }
         }
     });
-    let counter = 1;
-    return Array.from(colors).slice(0,10).map(color => ({ // Limit to 10 colors
-        color: color,
-        name: `Color ${counter}`,
-        slug: `color-${counter++}`
-    }));
+    return Array.from(colors.values()).slice(0, 10);
 }
 
 function extractTypographyStyles(cssAst) {
     let globalFontSize = null;
     const elementFontSizes = {};
     const elementsToStyle = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
-
     cssAst.walkRules(rule => {
         if (rule.selector === 'body' || rule.selector === 'html') {
-            rule.walkDecls('font-size', decl => {
-                globalFontSize = decl.value; // Takes the last one specified if multiple
-            });
+            rule.walkDecls('font-size', decl => { globalFontSize = decl.value; });
         }
         elementsToStyle.forEach(tag => {
-            // Simple selector check, doesn't handle complex selectors like 'body p' yet for element-specific.
-            // This will find 'p', '.content p', etc. More specific selectors might override.
             if (rule.selector.split(',').some(sel => sel.trim().endsWith(tag) && !sel.trim().includes(' '))) {
-                 rule.walkDecls('font-size', decl => {
-                    elementFontSizes[tag] = decl.value;
-                });
+                 rule.walkDecls('font-size', decl => { elementFontSizes[tag] = decl.value; });
             }
         });
     });
@@ -785,231 +657,44 @@ function extractTypographyStyles(cssAst) {
 }
 
 function extractLayoutSizes(cssAst) {
-    let contentSize = null;
-    let wideSize = null;
-    // Heuristic: look for common container class names or IDs
+    let contentSize = null; let wideSize = null;
     const commonContainerSelectors = ['.container', '.content-wrapper', '.main', '#content', '#main'];
-    
     cssAst.walkRules(rule => {
         if (commonContainerSelectors.some(s => rule.selector.includes(s))) {
             rule.walkDecls('max-width', decl => {
-                // Prefer larger max-widths as contentSize, could be more sophisticated
                 if (!contentSize || parseInt(decl.value) > parseInt(contentSize)) {
                     contentSize = decl.value;
                 }
             });
         }
     });
-
-    if (contentSize) {
-        // Basic wideSize: contentSize or slightly larger if possible (e.g. 1200px for 1000px content)
-        // For now, just set it to contentSize. Can be refined.
-        wideSize = contentSize; 
-    }
+    if (contentSize) wideSize = contentSize; // Basic assumption
     return { contentSize, wideSize };
 }
 
-/*
-  Helper function to normalize CSS color values for consistent comparison and processing.
-  Examples:
-  normalizeColor('#FFF'); // -> '#ffffff'
-  normalizeColor('#12345F'); // -> '#12345f'
-  normalizeColor(' RGB(0, 0, 0) '); // -> 'rgb(0,0,0)'
-  normalizeColor('rgba(255, 0, 0, 0.5)'); // -> 'rgba(255,0,0,0.5)'
-  normalizeColor('Red'); // -> 'red'
-*/
 function normalizeColor(colorValue) {
-    if (!colorValue || typeof colorValue !== 'string') {
-        return null;
-    }
-
+    if (!colorValue || typeof colorValue !== 'string') return null;
     let normalized = colorValue.toLowerCase().trim();
-
-    // Expand hex shorthand: #rgb -> #rrggbb
     if (normalized.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i)) {
         normalized = `#${normalized[1]}${normalized[1]}${normalized[2]}${normalized[2]}${normalized[3]}${normalized[3]}`;
     }
-
-    // Normalize rgb() and rgba() values: remove spaces, ensure lowercase 'rgb'/'rgba'
     const rgbMatch = normalized.match(/^rgb\((\s*\d+\s*,\s*\d+\s*,\s*\d+\s*)\)$/i);
-    if (rgbMatch) {
-        const values = rgbMatch[1].split(',').map(v => v.trim()).join(',');
-        normalized = `rgb(${values})`;
-    }
-
+    if (rgbMatch) normalized = `rgb(${rgbMatch[1].split(',').map(v => v.trim()).join(',')})`;
     const rgbaMatch = normalized.match(/^rgba\((\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*[\d.]+\s*)\)$/i);
-    if (rgbaMatch) {
-        const values = rgbaMatch[1].split(',').map(v => v.trim()).join(',');
-        normalized = `rgba(${values})`;
-    }
-    
-    // For named colors or other formats, just return the lowercased, trimmed version.
-    // A more comprehensive solution might map named colors to hex, but that's out of scope here.
+    if (rgbaMatch) normalized = `rgba(${rgbaMatch[1].split(',').map(v => v.trim()).join(',')})`;
     return normalized;
 }
 
-/*
-  Maps a CSS color value to a theme palette slug.
-  It uses normalizeColor for consistent comparison.
-
-  Example Palette:
-  const examplePalette = [
-    { "slug": "black", "color": "#000000", "name": "Black" },
-    { "slug": "white", "color": "#FFFFFF", "name": "White" },
-    { "slug": "primary", "color": "rgb(0, 0, 255)", "name": "Primary Blue" } 
-  ];
-
-  mapColorToPaletteSlug('#000', examplePalette); // -> "black"
-  mapColorToPaletteSlug('rgb(255,255,255)', examplePalette); // -> "white"
-  mapColorToPaletteSlug('blue', examplePalette); // -> "primary" (if normalizeColor handles 'blue' to 'rgb(0,0,255)' or if palette has 'blue')
-                                                  // Current normalizeColor doesn't convert named colors to hex/rgb, so this would only work if palette also uses 'blue'.
-  mapColorToPaletteSlug('#123456', examplePalette); // -> null
-  mapColorToPaletteSlug(null, examplePalette); // -> null
-  mapColorToPaletteSlug('#FF0000', null); // -> null
-*/
 function mapColorToPaletteSlug(colorValue, palette) {
-    if (!colorValue || !palette || !Array.isArray(palette)) {
-        return null;
-    }
-
+    if (!colorValue || !palette || !Array.isArray(palette)) return null;
     const normalizedInputColor = normalizeColor(colorValue);
-    if (!normalizedInputColor) {
-        return null; // Invalid input color
-    }
-
+    if (!normalizedInputColor) return null;
     for (const paletteEntry of palette) {
-        if (paletteEntry && paletteEntry.color && typeof paletteEntry.slug === 'string') {
-            const normalizedPaletteColor = normalizeColor(paletteEntry.color);
-            if (normalizedPaletteColor === normalizedInputColor) {
-                return paletteEntry.slug;
-            }
+        if (paletteEntry && paletteEntry.color && normalizeColor(paletteEntry.color) === normalizedInputColor) {
+            return paletteEntry.slug;
         }
     }
-
-    return null; // No match found
+    return null;
 }
 
 main();
-          const $element = $(element);
-          if ($element.closest('figure.wp-block-image').length > 0) return; // Already part of a wp:image block
-
-          const src = $element.attr('src') || '';
-          const alt = $element.attr('alt') || '';
-          const wpImageBlock = `<!-- wp:image {"id":0,"sizeSlug":"large","linkDestination":"none"} --><figure class="wp-block-image size-large"><img src="${src}" alt="${alt}"/></figure><!-- /wp:image -->`;
-          $element.replaceWith(wpImageBlock);
-        });
-
-        // Process LI elements
-        $('li').each((index, element) => {
-          const $element = $(element);
-          if (!$element.parent().is('ul') && !$element.parent().is('ol')) return; // Only LIs in UL/OL
-
-          const prevSib = $element[0].prevSibling;
-          const nextSib = $element[0].nextSibling;
-          if (prevSib && prevSib.type === 'comment' && prevSib.data.trim() === 'wp:list-item' &&
-              nextSib && nextSib.type === 'comment' && nextSib.data.trim() === '/wp:list-item') {
-            return; // Already wrapped
-          }
-          // Fallback for content already being comments (e.g. bad prior transform)
-          const currentContent = $element.html();
-          if (currentContent.startsWith('<!-- wp:list-item -->') && currentContent.endsWith('<!-- /wp:list-item -->')) {
-              return;
-          }
-          
-          const originalOuterHtml = $.html($element);
-          $element.replaceWith(`<!-- wp:list-item -->${originalOuterHtml}<!-- /wp:list-item -->`);
-        });
-
-        // Process UL elements
-        $('ul').each((index, element) => {
-          const $element = $(element);
-          const prevSib = $element[0].prevSibling;
-          const nextSib = $element[0].nextSibling;
-          if (prevSib && prevSib.type === 'comment' && prevSib.data.trim() === 'wp:list' &&
-              nextSib && nextSib.type === 'comment' && nextSib.data.trim() === '/wp:list') {
-            return; // Already wrapped
-          }
-          $element.replaceWith(`<!-- wp:list -->${$.html($element)}<!-- /wp:list -->`);
-        });
-
-        // Process OL elements
-        $('ol').each((index, element) => {
-          const $element = $(element);
-          const prevSib = $element[0].prevSibling;
-          const nextSib = $element[0].nextSibling;
-          if (prevSib && prevSib.type === 'comment' && prevSib.data.trim() === 'wp:list {"ordered":true}' &&
-              nextSib && nextSib.type === 'comment' && nextSib.data.trim() === '/wp:list') {
-            return; // Already wrapped
-          }
-          $element.replaceWith(`<!-- wp:list {"ordered":true} -->${$.html($element)}<!-- /wp:list -->`);
-        });
-
-        // Process P elements
-        $('p').each((index, element) => {
-          const $element = $(element);
-          // If a p is inside a list item, it should not be wrapped by wp:paragraph (WordPress handles this by default)
-          if ($element.closest('li').length > 0) return;
-
-          const prevSib = $element[0].prevSibling;
-          const nextSib = $element[0].nextSibling;
-          if (prevSib && prevSib.type === 'comment' && prevSib.data.trim() === 'wp:paragraph' &&
-              nextSib && nextSib.type === 'comment' && nextSib.data.trim() === '/wp:paragraph') {
-            return; // Already wrapped
-          }
-          $element.replaceWith(`<!-- wp:paragraph -->${$.html($element)}<!-- /wp:paragraph -->`);
-        });
-
-        // Process H1-H6 elements
-        $('h1, h2, h3, h4, h5, h6').each((index, element) => {
-          const $element = $(element);
-          const tagName = $element.prop('tagName').toLowerCase();
-          const level = tagName.substring(1);
-          
-          const prevSib = $element[0].prevSibling;
-          const nextSib = $element[0].nextSibling;
-          if (prevSib && prevSib.type === 'comment' && prevSib.data.trim() === `wp:heading {"level":${level}}` &&
-              nextSib && nextSib.type === 'comment' && nextSib.data.trim() === '/wp:heading') {
-            return; // Already wrapped
-          }
-          $element.replaceWith(`<!-- wp:heading {"level":${level}} -->${$.html($element)}<!-- /wp:heading -->`);
-        });
-        
-        // Process A elements (standalone links)
-        $('a').each((index, element) => {
-            const $element = $(element);
-            const parentTag = $element.parent().prop('tagName')?.toLowerCase();
-
-            // Check if already wrapped by wp:paragraph
-            const prevNode = $element[0].prevSibling;
-            const nextNode = $element[0].nextSibling;
-            if (prevNode && prevNode.type === 'comment' && prevNode.data.trim() === 'wp:paragraph' &&
-                nextNode && nextNode.type === 'comment' && nextNode.data.trim() === '/wp:paragraph') {
-                return; // Already wrapped as a paragraph
-            }
-
-            // If parent is p, h*, li, or another a, it's likely handled or part of accepted content.
-            // Also, if it's inside a figure (e.g. wp:image can have links in its caption, which is a figcaption often).
-            if (['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'a', 'figure', 'figcaption'].includes(parentTag)) {
-                return;
-            }
-            
-            // If it's a direct child of body or a div (common for grouping that isn't a block itself yet)
-            // This also implies it's not inside any other block-level element we've processed.
-            if (parentTag === 'body' || parentTag === 'div') {
-                 $element.replaceWith(`<!-- wp:paragraph -->${$.html($element)}<!-- /wp:paragraph -->`);
-            }
-        });
-
-        const transformedHtml = $('body').html(); // Get content of <body>
-        
-  } catch (err) {
-    if (err.code === 'ENOENT') {
-      console.error(`Error: Directory not found at path: ${inputDir}`);
-    } else {
-      console.error('Error processing files:', err.message);
-    }
-    process.exit(1);
-  }
-}
-
-processHtmlFiles();
