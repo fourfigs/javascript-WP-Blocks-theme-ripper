@@ -1,0 +1,284 @@
+/*
+Theme Name: NMERA Blocks
+Theme URI: https://nmera.org
+Author: NMERA
+Author URI: https://nmera.org
+Description: A Full Site Editing compatible WordPress theme for Northern Mendocino Ecosystem Recovery Alliance
+Version: 1.0.0
+Requires at least: 6.0
+Tested up to: 6.4
+Requires PHP: 7.4
+License: GNU General Public License v2 or later
+License URI: http://www.gnu.org/licenses/gpl-2.0.html
+Text Domain: nmera-blocks
+*/
+
+/* Import Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Jost:wght@500;600;700&family=Open+Sans:wght@400;500&display=swap');
+
+/* Base Styles */
+:root {
+    --wp--preset--color--primary: #ff9800;
+    --wp--preset--color--secondary: #4CAF50;
+    --wp--preset--color--background: #ffffff;
+    --wp--preset--color--foreground: #333333;
+    --wp--preset--color--dark: #212529;
+    --wp--preset--font-family--jost: 'Jost', sans-serif;
+    --wp--preset--font-family--open-sans: 'Open Sans', sans-serif;
+}
+
+/* Top Bar Styles */
+.top-bar {
+    background-color: var(--wp--preset--color--dark) !important;
+    padding: 0.5rem 0 !important;
+}
+
+.top-bar .wp-block-column {
+    padding: 0 1.25rem !important;
+}
+
+.top-bar .fa {
+    margin-right: 0.5rem;
+}
+
+.top-bar .far.fa-envelope {
+    margin-left: 1rem;
+    margin-right: 0.5rem;
+}
+
+.top-bar .wp-block-button__link {
+    background: none !important;
+    padding: 0 !important;
+    margin: 0 0.25rem !important;
+}
+
+/* Navigation Styles */
+.site-header {
+    background-color: var(--wp--preset--color--background);
+    padding: 1rem 0 !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.site-header .wp-block-group {
+    align-items: center !important;
+}
+
+.wp-block-navigation {
+    margin: 0 !important;
+}
+
+.wp-block-navigation__container {
+    gap: 1.5rem !important;
+}
+
+.wp-block-navigation-item {
+    font-family: var(--wp--preset--font-family--jost) !important;
+    font-weight: 500 !important;
+}
+
+.wp-block-navigation-item__content {
+    padding: 1rem 0 !important;
+    color: var(--wp--preset--color--foreground) !important;
+}
+
+.wp-block-navigation-item__content:hover {
+    color: var(--wp--preset--color--primary) !important;
+}
+
+.wp-block-site-title {
+    font-family: var(--wp--preset--font-family--jost) !important;
+    font-weight: 700 !important;
+    font-size: 2rem !important;
+    margin: 0 !important;
+    color: var(--wp--preset--color--foreground) !important;
+}
+
+.wp-block-site-title a {
+    text-decoration: none !important;
+}
+
+/* Hero Section */
+.wp-block-nmera-hero {
+    position: relative;
+    overflow: hidden;
+    width: 100%;
+    min-height: 750px;
+    height: 100vh;
+    background-size: cover;
+    background-position: center;
+    clip-path: ellipse(110vw 65vh at 50% 35%);
+}
+
+.hero-content {
+    position: absolute;
+    top: 50%;
+    left: 10%;
+    transform: translateY(-50%);
+    color: white;
+    max-width: 600px;
+}
+
+.hero-title {
+    font-size: 3.5rem !important;
+    line-height: 1.2 !important;
+    margin-bottom: 1.5rem !important;
+}
+
+/* Buttons */
+.wp-block-button__link {
+    background-color: var(--wp--preset--color--primary);
+    color: white;
+    padding: 12px 24px;
+    border-radius: 5px;
+    text-decoration: none;
+    transition: background-color 0.3s ease;
+    font-weight: 500 !important;
+}
+
+.wp-block-button__link:hover {
+    background-color: #e68900;
+}
+
+/* Statistics Section */
+.statistics-section {
+    padding: 5rem 0 !important;
+}
+
+.stats-cover {
+    min-height: 400px !important;
+}
+
+.stats-cover .wp-block-heading {
+    font-size: 3rem !important;
+    margin-bottom: 0.5rem !important;
+}
+
+/* Donation CTA */
+.donation-cta {
+    padding: 4rem 0 !important;
+}
+
+.donation-cta .wp-block-heading {
+    font-size: 2.5rem !important;
+    margin-bottom: 1rem !important;
+}
+
+.donation-cta .wp-block-paragraph {
+    font-size: 1.1rem !important;
+    margin-bottom: 2rem !important;
+}
+
+/* Footer */
+.site-footer {
+    padding: 2rem 0 !important;
+}
+
+.site-footer .wp-block-button__link {
+    background: none !important;
+    padding: 0.5rem !important;
+}
+
+/* Responsive Design */
+@media (max-width: 1200px) {
+    .wp-block-nmera-hero {
+        min-height: 650px;
+        clip-path: ellipse(100vw 70vh at 50% 40%);
+    }
+    
+    .hero-title {
+        font-size: 3rem !important;
+    }
+}
+
+@media (max-width: 768px) {
+    .wp-block-nmera-hero {
+        min-height: 550px;
+        clip-path: ellipse(110vw 75vh at 50% 45%);
+    }
+    
+    .hero-content {
+        left: 5%;
+        max-width: 90%;
+    }
+    
+    .hero-title {
+        font-size: 2.5rem !important;
+    }
+    
+    .top-bar {
+        display: none !important;
+    }
+    
+    .wp-block-navigation__responsive-container {
+        background-color: var(--wp--preset--color--background) !important;
+    }
+    
+    .wp-block-navigation__responsive-container-content {
+        padding: 1rem !important;
+    }
+    
+    .wp-block-navigation-item {
+        padding: 0.5rem 0 !important;
+    }
+}
+
+@media (max-width: 480px) {
+    .wp-block-nmera-hero {
+        min-height: 500px;
+        clip-path: ellipse(120vw 80vh at 50% 50%);
+    }
+    
+    .hero-title {
+        font-size: 2rem !important;
+    }
+}
+
+/* Sticky Header */
+.sticky-header {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 1000 !important;
+    transition: all 0.3s ease !important;
+    background-color: var(--wp--preset--color--background) !important;
+}
+
+.sticky-header.sticky {
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1) !important;
+}
+
+/* Back to Top Button */
+.back-to-top {
+    position: fixed !important;
+    bottom: 30px !important;
+    right: 30px !important;
+    z-index: 999 !important;
+    display: none !important;
+}
+
+.back-to-top.show {
+    display: block !important;
+}
+
+.back-to-top-button {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 40px !important;
+    height: 40px !important;
+    background-color: var(--wp--preset--color--primary) !important;
+    color: white !important;
+    border-radius: 50% !important;
+    text-decoration: none !important;
+    transition: all 0.3s ease !important;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2) !important;
+}
+
+.back-to-top-button:hover {
+    background-color: #e68900 !important;
+    transform: translateY(-3px) !important;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.3) !important;
+}
+
+.back-to-top-button i {
+    font-size: 1.2rem !important;
+} 
