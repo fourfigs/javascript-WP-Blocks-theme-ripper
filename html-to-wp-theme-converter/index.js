@@ -155,6 +155,7 @@ async function processHtmlFiles(cssAst) {
         }
         
         const bodyContentForConversion = $('body').html();
+        console.log(`DEBUG: For file ${htmlFile}, bodyContentForConversion is: "${bodyContentForConversion}"`);
         const bodyBlockHtml = await convertHtmlToBlockSyntax(bodyContentForConversion, cssAst, 'body');
 
 
@@ -173,16 +174,19 @@ async function processHtmlFiles(cssAst) {
 }
 
 async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 'body') {
+    console.log(`[[convertHtmlToBlockSyntax START]] Context: ${context}, Input HTML: "${htmlContentToConvert}"`);
     // Determine if the content is a fragment or a full body
     const isFragment = context !== 'body';
     const $ = cheerio.load(htmlContentToConvert, { decodeEntities: false }, isFragment); 
     
     try {
         const $root = isFragment ? $ : $('body');
+        console.log(`[[convertHtmlToBlockSyntax CHEERIO_LOADED]] $root.html() initial: "${$root.html()}"`);
 
         // Process direct children first in specific order
         // Use a for...of loop to handle async operations within the loop correctly
         for (const element of $root.children().toArray()) {
+            console.log(`[[convertHtmlToBlockSyntax LOOP_ELEMENT]] TagName: ${$(element).prop('tagName')}, OuterHTML: ${$.html(element)}`);
             const $element = $(element);
             let processed = false; 
             let blockName = ''; 
@@ -314,7 +318,9 @@ async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 
             }
         } // End of for...of loop
 
-        return isFragment ? $root.html() : $('body').html();
+        console.log(`[[convertHtmlToBlockSyntax PRE_RETURN]] $root.html() final: "${$root.html()}"`);
+        const outputHtml = isFragment ? $root.html() : $('body').html();
+        return outputHtml === null ? '' : outputHtml;
 
     } catch (err) {
         console.error(`ERROR in convertHtmlToBlockSyntax (context: ${context}): ${err.message}`, err.stack);
@@ -427,7 +433,7 @@ function findElementStyles($element, cssAst) {
     return { styles: finalStyles, directStyles, generatedClassName };
 }
 
-async function identifyAndProcessCommonParts(headerOrFooterCandidates, totalFiles, filesWithElement, commonalityThreshold, partType, cssAst) {
+async function processSingleCommonPart(headerOrFooterCandidates, totalFiles, filesWithElement, commonalityThreshold, partType, cssAst) {
     const originalHtml = findMostFrequent(headerOrFooterCandidates, totalFiles, filesWithElement, commonalityThreshold);
     let blockHtml = null;
     let originalTagName = partType; 
@@ -470,12 +476,12 @@ async function identifyAndProcessCommonParts(headerOrFooterCandidates, totalFile
 }
 
 async function identifyAndProcessCommonParts(headerCandidates, footerCandidates, totalFiles, filesWithHeader, filesWithFooter, cssAst) {
-    const headerResult = await identifyAndProcessCommonParts(headerCandidates, totalFiles, filesWithHeader, 0.75, 'header', cssAst);
+    const headerResult = await processSingleCommonPart(headerCandidates, totalFiles, filesWithHeader, 0.75, 'header', cssAst);
     commonHeaderOriginalHtml = headerResult.originalHtml;
     commonHeaderBlockHtml = headerResult.blockHtml;
     headerTagName = headerResult.tagName;
 
-    const footerResult = await identifyAndProcessCommonParts(footerCandidates, totalFiles, filesWithFooter, 0.75, 'footer', cssAst);
+    const footerResult = await processSingleCommonPart(footerCandidates, totalFiles, filesWithFooter, 0.75, 'footer', cssAst);
     commonFooterOriginalHtml = footerResult.originalHtml;
     commonFooterBlockHtml = footerResult.blockHtml;
     footerTagName = footerResult.tagName;
