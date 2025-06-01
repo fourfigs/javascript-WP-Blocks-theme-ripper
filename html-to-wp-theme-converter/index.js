@@ -75,9 +75,26 @@ block_template_part( 'index' );`;
     console.log('INFO: Initial theme.json created with FSE layout settings (contentSize, wideSize, useRootPaddingAwareAlignments).');
     try {
         globalThemeJsonData = JSON.parse(themeJsonContent);
-        console.log(`Created theme.json in ${baseOutputDir} and loaded into globalThemeJsonData`);
+        // Ensure essential structures exist for later processing stages
+        globalThemeJsonData.settings = globalThemeJsonData.settings || {};
+        globalThemeJsonData.settings.color = globalThemeJsonData.settings.color || {};
+        globalThemeJsonData.settings.color.palette = globalThemeJsonData.settings.color.palette || [];
+        globalThemeJsonData.settings.typography = globalThemeJsonData.settings.typography || {};
+        globalThemeJsonData.settings.typography.fontFamilies = globalThemeJsonData.settings.typography.fontFamilies || [];
+        globalThemeJsonData.settings.typography.fontSizes = globalThemeJsonData.settings.typography.fontSizes || [];
+        console.log(`Created theme.json in ${baseOutputDir} and loaded into globalThemeJsonData with initial structures.`);
     } catch (e) {
         console.error('Error parsing initial theme.json content:', e.message);
+        // Initialize globalThemeJsonData with a fallback structure if parsing fails, to prevent downstream errors
+        globalThemeJsonData = {
+            settings: {
+                color: { palette: [] },
+                typography: { fontFamilies: [], fontSizes: [] },
+                layout: {}
+            },
+            styles: {}
+        };
+        console.log('Initialized globalThemeJsonData with fallback structure due to parsing error.');
     }
     
     await fs.ensureDir(path.join(baseOutputDir, 'templates'));
@@ -158,10 +175,15 @@ async function processHtmlFiles(cssAst) {
         console.log(`DEBUG: For file ${htmlFile}, bodyContentForConversion is: "${bodyContentForConversion}"`);
         const bodyBlockHtml = await convertHtmlToBlockSyntax(bodyContentForConversion, cssAst, 'body');
 
+        // bodyBlockHtml is a full HTML doc string (<html><body>...</body></html>) due to Cheerio's fragment processing.
+        // We need to extract only the content of its effective <body> tag for the final template file.
+        const $finalDoc = cheerio.load(bodyBlockHtml, { decodeEntities: false });
+        const finalContentForFile = $finalDoc('body').html();
+        console.log(`DEBUG: For file ${htmlFile}, finalContentForFile for template is: "${finalContentForFile}"`);
 
         const templateFileName = htmlFile;
         const outputFilePath = path.join(baseOutputDir, 'templates', templateFileName);
-        await fs.writeFile(outputFilePath, bodyBlockHtml);
+        await fs.writeFile(outputFilePath, finalContentForFile); // Write the extracted body content
         console.log(`Saved final template to ${outputFilePath}`);
       } catch (err) {
         console.error(`Error processing file ${htmlFile} for final template generation:`, err.message);
@@ -173,19 +195,26 @@ async function processHtmlFiles(cssAst) {
   }
 }
 
-async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 'body') {
-    console.log(`[[convertHtmlToBlockSyntax START]] Context: ${context}, Input HTML: "${htmlContentToConvert}"`);
-    // Determine if the content is a fragment or a full body
-    const isFragment = context !== 'body';
-    const $ = cheerio.load(htmlContentToConvert, { decodeEntities: false }, isFragment); 
+async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 'body', navContext = false) {
+    console.log(`[[convertHtmlToBlockSyntax START]] Context: ${context}, Input HTML: "${htmlContentToConvert}", NavContext: ${navContext}`);
+    const trimmedHtmlContent = htmlContentToConvert.trim();
+    console.log(`[[convertHtmlToBlockSyntax TRIMMED_INPUT]] "${trimmedHtmlContent}"`);
+
+    // ALWAYS load as a fragment to avoid Cheerio's full document wrapping issues for body content
+    const $ = cheerio.load(trimmedHtmlContent, { decodeEntities: false }, true); // Force isFragment = true
     
     try {
-        const $root = isFragment ? $ : $('body');
-        console.log(`[[convertHtmlToBlockSyntax CHEERIO_LOADED]] $root.html() initial: "${$root.html()}"`);
+        // $ now directly represents the root of the parsed fragment.
+        // Its children are the top-level elements from trimmedHtmlContent.
+        // For consistency in the loop, we can still use a variable named $root, though it's just $ here.
+        const $root = $;
+        console.log(`[[convertHtmlToBlockSyntax CHEERIO_LOADED_AS_FRAGMENT]] $root.html() initial: "${$root.html()}"`);
 
         // Process direct children first in specific order
         // Use a for...of loop to handle async operations within the loop correctly
-        for (const element of $root.children().toArray()) {
+        // When Cheerio loads a fragment that looks like body content, it wraps it in <html><body>...</body></html>.
+        // We need to iterate over the children of this implicit <body> tag.
+        for (const element of $.root().find('body').first().children().toArray()) {
             console.log(`[[convertHtmlToBlockSyntax LOOP_ELEMENT]] TagName: ${$(element).prop('tagName')}, OuterHTML: ${$.html(element)}`);
             const $element = $(element);
             let processed = false; 
@@ -202,22 +231,55 @@ async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 
                 processed = true;
             }
             else if ($element.is('li')) {
-                blockName = 'wp:list-item';
-                const listItemContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
-                console.log(`DEBUG: Applying to ${blockName}: (content only)`);
-                $element.replaceWith(`<!-- wp:list-item -->${listItemContent}<!-- /wp:list-item -->`);
+                if (navContext) {
+                    const $a = $element.children('a').first();
+                    if ($a.length) {
+                        const label = $a.text();
+                        const url = $a.attr('href') || '#';
+                        const navLinkBlock = `<!-- wp:navigation-link {"label":"${label}","url":"${url}","kind":"custom","isTopLevelLink":true} /-->`;
+                        console.log(`INFO: Converting LI > A to wp:navigation-link: ${label} -> ${url}`);
+                        $element.replaceWith(navLinkBlock);
+                    } else {
+                        // Fallback for LI in NAV without A: process content, could be plain text or other blocks
+                        const liContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment', true);
+                        $element.replaceWith(liContent); // Replace LI with its processed content directly
+                    }
+                } else {
+                    blockName = 'wp:list-item';
+                    const listItemContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment'); // navContext is false or default
+                    console.log(`DEBUG: Applying to ${blockName}: (content only)`);
+                    $element.replaceWith(`<!-- wp:list-item -->${listItemContent}<!-- /wp:list-item -->`);
+                }
                 processed = true;
             }
             else if ($element.is('ul') || $element.is('ol')) {
-                blockName = 'wp:list';
-                const attrs = {};
-                if ($element.is('ol')) attrs.ordered = true;
-                console.log(`INFO: Converting ${$element.prop('tagName').toUpperCase()} to ${blockName} ${attrs.ordered ? '(ordered)' : ''}.`);
-                
-                const listContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
-                const attributeString = Object.keys(attrs).length > 0 ? ` ${JSON.stringify(attrs)}` : '';
-                console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
-                $element.replaceWith(`<!-- wp:list${attributeString} -->${listContent}<!-- /wp:list -->`);
+                if (navContext) {
+                    // This UL/OL is inside a NAV. Its children (LIs) will be processed into nav items.
+                    // The UL/OL element itself is replaced by the processed content of its children.
+                    const navListContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment', true);
+                    $element.replaceWith(navListContent);
+                } else {
+                    blockName = 'wp:list';
+                    const attrs = {};
+                    if ($element.is('ol')) attrs.ordered = true;
+                    console.log(`INFO: Converting ${$element.prop('tagName').toUpperCase()} to ${blockName} ${attrs.ordered ? '(ordered)' : ''}.`);
+
+                    const listContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment'); // navContext is false or default
+                    const attributeString = Object.keys(attrs).length > 0 ? ` ${JSON.stringify(attrs)}` : '';
+                    console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
+                    $element.replaceWith(`<!-- wp:list${attributeString} -->${listContent}<!-- /wp:list -->`);
+                }
+                processed = true;
+            }
+            else if ($element.is('nav')) {
+                blockName = 'core/navigation';
+                console.log(`INFO: Converting NAV to ${blockName}.`);
+                // Attributes for wp:navigation can be extensive (layout, colors, justification, etc.)
+                // For now, we'll create a basic wrapper and process inner content.
+                const navAttrs = {}; // Placeholder for future attribute extraction
+                const navInnerBlocks = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment', true); // Pass navContext = true
+                const navAttrsString = Object.keys(navAttrs).length > 0 ? ` ${JSON.stringify(navAttrs)}` : '';
+                $element.replaceWith(`<!-- wp:navigation${navAttrsString} -->${navInnerBlocks}<!-- /wp:navigation -->`);
                 processed = true;
             }
             else if ($element.is('p')) {
@@ -267,10 +329,11 @@ async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 
                 $element.replaceWith(`<!-- wp:heading${attributeString} -->${hContent}<!-- /wp:heading -->`);
                 processed = true;
             }
-            else if ($element.is('div')) {
+            else if ($element.is('div, header, main, footer')) {
                 blockName = 'wp:group';
-                console.log(`INFO: Converting DIV (id: ${$element.attr('id') || 'none'}, class: ${$element.attr('class') || 'none'}) to ${blockName}.`);
-                const groupAttrs = { tagName: 'div' };
+                const actualTagName = $element.prop('tagName').toLowerCase();
+                console.log(`INFO: Converting ${actualTagName.toUpperCase()} (id: ${$element.attr('id') || 'none'}, class: ${$element.attr('class') || 'none'}) to ${blockName}.`);
+                const groupAttrs = { tagName: actualTagName };
                 const styleResults = findElementStyles($element, cssAst);
                 if (styleResults.directStyles && Object.keys(styleResults.directStyles).length > 0) groupAttrs.style = styleResults.directStyles;
                 if (styleResults.generatedClassName) groupAttrs.className = (groupAttrs.className || '') + ` ${styleResults.generatedClassName}`;
@@ -278,27 +341,53 @@ async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 
                 const backgroundColorValue = styleResults.styles['background-color'];
                 if (backgroundColorValue) {
                     const bgColorSlug = mapColorToPaletteSlug(backgroundColorValue, globalThemeJsonData.settings.color.palette);
-                    if (bgColorSlug) groupAttrs.backgroundColor = bgColorSlug;
-                    else {
-                        let classNameForBg = styleResults.generatedClassName;
-                        if (!classNameForBg && !styleResults.directStyles?.['background-color']) {
-                            customClassCounter++; classNameForBg = `custom-style-${customClassCounter}`;
-                            groupAttrs.className = (groupAttrs.className || '') + ` ${classNameForBg}`;
+                    if (bgColorSlug) {
+                        groupAttrs.style = groupAttrs.style || {};
+                        groupAttrs.style.color = groupAttrs.style.color || {};
+                        groupAttrs.style.color.background = bgColorSlug;
+                    } else { // Not a palette color
+                        if (styleResults.generatedClassName) {
+                            // findElementStyles created a class, which should cover this non-palette background-color.
+                            // Ensure this class is added to the block.
+                            if (groupAttrs.className === undefined || !groupAttrs.className.includes(styleResults.generatedClassName)) {
+                                groupAttrs.className = (groupAttrs.className || '') + ` ${styleResults.generatedClassName}`;
+                                groupAttrs.className = groupAttrs.className.trim();
+                            }
+                        } else {
+                            // No general custom class from findElementStyles exists.
+                            // Create a NEW specific class just for this background-color.
+                            customClassCounter++;
+                            const newBgClassName = `custom-style-${customClassCounter}`;
+                            groupAttrs.className = (groupAttrs.className || '') + ` ${newBgClassName}`;
+                            groupAttrs.className = groupAttrs.className.trim();
+                            customCssRulesForStyleSheet.push(`.${newBgClassName} { background-color: ${backgroundColorValue}; }`);
                         }
-                        if (classNameForBg) customCssRulesForStyleSheet.push(`.${classNameForBg.trim().split(' ').pop()} { background-color: ${backgroundColorValue}; }`);
                     }
                 }
                 const textColorValue = styleResults.styles['color'];
                 if (textColorValue) {
                     const textColorSlug = mapColorToPaletteSlug(textColorValue, globalThemeJsonData.settings.color.palette);
-                    if (textColorSlug) groupAttrs.textColor = textColorSlug;
-                    else {
-                        let classNameForColor = styleResults.generatedClassName;
-                         if (!classNameForColor && !styleResults.directStyles?.['color']) {
-                             customClassCounter++; classNameForColor = `custom-style-${customClassCounter}`;
-                             groupAttrs.className = (groupAttrs.className || '') + ` ${classNameForColor}`;
-                         }
-                        if(classNameForColor) customCssRulesForStyleSheet.push(`.${classNameForColor.trim().split(' ').pop()} { color: ${textColorValue}; }`);
+                    if (textColorSlug) {
+                        groupAttrs.style = groupAttrs.style || {};
+                        groupAttrs.style.color = groupAttrs.style.color || {};
+                        groupAttrs.style.color.text = textColorSlug;
+                    } else { // Not a palette color
+                        if (styleResults.generatedClassName) {
+                            // findElementStyles created a class, which should cover this non-palette text color.
+                            // Ensure this class is added to the block.
+                            if (groupAttrs.className === undefined || !groupAttrs.className.includes(styleResults.generatedClassName)) {
+                                groupAttrs.className = (groupAttrs.className || '') + ` ${styleResults.generatedClassName}`;
+                                groupAttrs.className = groupAttrs.className.trim();
+                            }
+                        } else {
+                            // No general custom class from findElementStyles exists.
+                            // Create a NEW specific class just for this text color.
+                            customClassCounter++;
+                            const newTextColorClassName = `custom-style-${customClassCounter}`;
+                            groupAttrs.className = (groupAttrs.className || '') + ` ${newTextColorClassName}`;
+                            groupAttrs.className = groupAttrs.className.trim();
+                            customCssRulesForStyleSheet.push(`.${newTextColorClassName} { color: ${textColorValue}; }`);
+                        }
                     }
                 }
                 if (groupAttrs.className) groupAttrs.className = groupAttrs.className.trim();
@@ -309,7 +398,10 @@ async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 
                 $element.replaceWith(`<!-- wp:group${groupAttributeString} -->${divContent}<!-- /wp:group -->`);
                 processed = true;
             }
-            else if ($element.is('a') && !$element.parent().is('p, h1, h2, h3, h4, h5, h6, li')) {
+            else if ($element.is('a') &&
+                     !$element.parent().is('p, h1, h2, h3, h4, h5, h6, li') &&
+                     !($element.parent().is('li') && $element.parent().parent().is('ul') && $element.parent().parent().parent().is('nav'))) {
+                // Exclude <a> tags within a nav structure (nav > ul > li > a) as they'll be handled by 'li' for navs
                 blockName = 'wp:paragraph';
                 const pContent = await convertHtmlToBlockSyntax($.html($element), cssAst, 'fragment');
                 console.log(`DEBUG: Applying to ${blockName} (wrapping 'a'): (content only)`);
@@ -319,7 +411,7 @@ async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 
         } // End of for...of loop
 
         console.log(`[[convertHtmlToBlockSyntax PRE_RETURN]] $root.html() final: "${$root.html()}"`);
-        const outputHtml = isFragment ? $root.html() : $('body').html();
+        const outputHtml = $root.html(); // Get HTML from the fragment root
         return outputHtml === null ? '' : outputHtml;
 
     } catch (err) {
