@@ -44,28 +44,43 @@
           "slug": "color-6"
         },
         {
-          "color": "#222222",
+          "color": "#f0f0f0",
           "name": "Color 7",
           "slug": "color-7"
+        },
+        {
+          "color": "#222222",
+          "name": "Color 8",
+          "slug": "color-8"
         }
       ]
     },
     "typography": {
       "fontFamilies": [
         {
-          "fontFamily": "Arial, sans-serif",
+          "fontFamily": "'CustomTestFont', Arial, sans-serif",
           "name": "Font 1",
           "slug": "font-1"
         },
         {
-          "fontFamily": "'Georgia', serif",
+          "fontFamily": "'CustomTestFont'",
           "name": "Font 2",
           "slug": "font-2"
         },
         {
-          "fontFamily": "'Arial', sans-serif",
+          "fontFamily": "sans-serif",
           "name": "Font 3",
           "slug": "font-3"
+        },
+        {
+          "fontFamily": "'Georgia', serif",
+          "name": "Font 4",
+          "slug": "font-4"
+        },
+        {
+          "fontFamily": "'Arial', sans-serif",
+          "name": "Font 5",
+          "slug": "font-5"
         }
       ],
       "fontSizes": []

@@ -11,79 +11,136 @@ Text Domain: converted-wp-theme
 Tags: block-styles, full-site-editing, accessibility-ready
 */
 
-/* Custom styles from converter */
+/* @keyframes rules */
+@keyframes myAnimation {
+  0%   { background-color: red; left: 0px; top: 0px; }
+  25%  { background-color: yellow; left: 50px; top: 0px; }
+  50%  { background-color: blue; left: 50px; top: 50px; }
+  75%  { background-color: green; left: 0px; top: 50px; }
+  100% { background-color: red; left: 0px; top: 0px; }
+}
 
-.custom-style-1 { background-color: #333; }
-.custom-style-2 { color: #fff; }
-.custom-style-3 {
+
+/* Custom styles from converter */
+.custom-style-1 {
+  background-color: #333;
+  color: #fff;
+}
+.custom-style-2 {
   font-family: 'Georgia', serif;
+  color: #222;
   font-size: 2.5em;
 }
-.custom-style-4 {
+.custom-style-3 {
   font-family: 'Georgia', serif;
+  color: #222;
   font-size: 2em;
 }
-.custom-style-5 {
+.custom-style-4 {
   line-height: 1.6;
 }
-.custom-style-6 { background-color: #e2e2e2; }
-.custom-style-7 {
+.custom-style-5 {
+  background-color: #e2e2e2;
+}
+.custom-style-6 {
   font-family: 'Georgia', serif;
+  color: #222;
   font-size: 1.5em;
+}
+.custom-style-7 {
+  line-height: 1.6;
 }
 .custom-style-8 {
   line-height: 1.6;
 }
-.custom-style-9 { background-color: #333; }
-.custom-style-10 { color: #fff; }
+.custom-style-9 {
+  animation-name: myAnimation;
+  animation-duration: 4s;
+  animation-iteration-count: infinite;
+  position: relative;
+}
+.custom-style-10 {
+  transition: background-color 0.5s ease, transform 0.5s ease;
+  background-color: lightblue;
+  transform: scale(1.1);
+}
 .custom-style-11 {
+  background-image: url('assets/images/background-1.png');
+}
+.custom-style-12 {
+  background-color: #333;
+  color: #fff;
+  position: fixed;
+  bottom: 0;
+  width: 100%;
+}
+.custom-style-13 {
   line-height: 1.6;
 }
-.custom-style-12 { background-color: #333; }
-.custom-style-13 { color: #fff; }
 .custom-style-14 {
-  font-family: 'Georgia', serif;
-  font-size: 2.5em;
+  background-color: #333;
+  color: #fff;
 }
 .custom-style-15 {
   font-family: 'Georgia', serif;
-  font-size: 2em;
+  color: #222;
+  font-size: 2.5em;
 }
 .custom-style-16 {
-  line-height: 1.6;
+  font-family: 'Georgia', serif;
+  color: #222;
+  font-size: 2em;
 }
 .custom-style-17 {
   line-height: 1.6;
 }
 .custom-style-18 {
-  font-style: italic;
-}
-.custom-style-19 {
   line-height: 1.6;
 }
-.custom-style-20 { background-color: #333; }
-.custom-style-21 { color: #fff; }
+.custom-style-19 {
+  background-color: #ffffcc;
+  font-style: italic;
+}
+.custom-style-20 {
+  line-height: 1.6;
+}
+.custom-style-21 {
+  background-color: #333;
+  color: #fff;
+  position: fixed;
+  bottom: 0;
+  width: 100%;
+}
 .custom-style-22 {
   line-height: 1.6;
 }
-.custom-style-23 { background-color: #333; }
-.custom-style-24 { color: #fff; }
-.custom-style-25 {
+.custom-style-23 {
+  background-color: #333;
+  color: #fff;
+}
+.custom-style-24 {
   font-family: 'Georgia', serif;
+  color: #222;
   font-size: 2.5em;
 }
-.custom-style-26 {
+.custom-style-25 {
   font-family: 'Georgia', serif;
+  color: #222;
   font-size: 1.5em;
+}
+.custom-style-26 {
+  line-height: 1.6;
 }
 .custom-style-27 {
   line-height: 1.6;
 }
 .custom-style-28 {
-  line-height: 1.6;
+  background-color: #333;
+  color: #fff;
+  position: fixed;
+  bottom: 0;
+  width: 100%;
 }
-.custom-style-29 { background-color: #333; }
-.custom-style-30 { color: #fff; }
-.custom-style-31 {
+.custom-style-29 {
   line-height: 1.6;
 }

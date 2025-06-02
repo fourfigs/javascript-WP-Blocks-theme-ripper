@@ -18,6 +18,9 @@ let footerTagName = "footer"; // Default
 let globalCssAst = null; // To store the loaded CSS AST
 let globalThemeJsonData = null; // To store loaded theme.json data
 let customCssRulesForStyleSheet = []; // To collect custom CSS rules
+let globalKeyframesRules = []; // To store @keyframes rules
+let globalAssetsToCopy = new Map(); // Using Map to store originalPath -> newThemePath
+let usedThemePaths = new Set(); // To ensure unique asset paths in the theme
 let customClassCounter = 0; // Counter for unique class names
 
 if (!inputDir) {
@@ -86,13 +89,13 @@ block_template_part( 'index' );`;
     } catch (e) {
         console.error('Error parsing initial theme.json content:', e.message);
         // Initialize globalThemeJsonData with a fallback structure if parsing fails, to prevent downstream errors
-        globalThemeJsonData = {
-            settings: {
-                color: { palette: [] },
+        globalThemeJsonData = { 
+            settings: { 
+                color: { palette: [] }, 
                 typography: { fontFamilies: [], fontSizes: [] },
                 layout: {}
-            },
-            styles: {}
+            }, 
+            styles: {} 
         };
         console.log('Initialized globalThemeJsonData with fallback structure due to parsing error.');
     }
@@ -173,7 +176,7 @@ async function processHtmlFiles(cssAst) {
         
         const bodyContentForConversion = $('body').html();
         console.log(`DEBUG: For file ${htmlFile}, bodyContentForConversion is: "${bodyContentForConversion}"`);
-        const bodyBlockHtml = await convertHtmlToBlockSyntax(bodyContentForConversion, cssAst, 'body');
+        const bodyBlockHtml = await convertHtmlToBlockSyntax(bodyContentForConversion, cssAst, 'body', false, filePath); // navContext = false, pass filePath
 
         // bodyBlockHtml is a full HTML doc string (<html><body>...</body></html>) due to Cheerio's fragment processing.
         // We need to extract only the content of its effective <body> tag for the final template file.
@@ -195,8 +198,8 @@ async function processHtmlFiles(cssAst) {
   }
 }
 
-async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 'body', navContext = false) {
-    console.log(`[[convertHtmlToBlockSyntax START]] Context: ${context}, Input HTML: "${htmlContentToConvert}", NavContext: ${navContext}`);
+async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 'body', navContext = false, baseFilePath = null) {
+    console.log(`[[convertHtmlToBlockSyntax START]] Context: ${context}, Input HTML: "${htmlContentToConvert}", NavContext: ${navContext}, BaseFilePath: ${baseFilePath}`);
     const trimmedHtmlContent = htmlContentToConvert.trim();
     console.log(`[[convertHtmlToBlockSyntax TRIMMED_INPUT]] "${trimmedHtmlContent}"`);
 
@@ -207,14 +210,14 @@ async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 
         // $ now directly represents the root of the parsed fragment.
         // Its children are the top-level elements from trimmedHtmlContent.
         // For consistency in the loop, we can still use a variable named $root, though it's just $ here.
-        const $root = $;
+        const $root = $; 
         console.log(`[[convertHtmlToBlockSyntax CHEERIO_LOADED_AS_FRAGMENT]] $root.html() initial: "${$root.html()}"`);
 
         // Process direct children first in specific order
         // Use a for...of loop to handle async operations within the loop correctly
         // When Cheerio loads a fragment that looks like body content, it wraps it in <html><body>...</body></html>.
         // We need to iterate over the children of this implicit <body> tag.
-        for (const element of $.root().find('body').first().children().toArray()) {
+        for (const element of $.root().find('body').first().children().toArray()) { 
             console.log(`[[convertHtmlToBlockSyntax LOOP_ELEMENT]] TagName: ${$(element).prop('tagName')}, OuterHTML: ${$.html(element)}`);
             const $element = $(element);
             let processed = false; 
@@ -222,9 +225,37 @@ async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 
 
             if ($element.is('img') && !$element.closest('figure.wp-block-image').length) {
                 blockName = 'wp:image';
-                console.log(`INFO: Converting IMG (src: ${$element.attr('src')}) to ${blockName}.`);
-                const src = $element.attr('src') || '';
+                let src = $element.attr('src') || '';
                 const alt = $element.attr('alt') || '';
+                
+                if (src && !src.startsWith('data:') && !src.startsWith('http:') && !src.startsWith('https:') && !src.startsWith('//')) {
+                    if (!baseFilePath) {
+                        console.warn(`WARN: Cannot resolve asset path for image src "${src}" in content processed without a base file path (e.g. common parts).`);
+                    } else {
+                        const imageSourceDir = path.dirname(baseFilePath);
+                        const resolvedOriginalPath = path.resolve(imageSourceDir, src);
+                        
+                        const assetFileName = path.basename(resolvedOriginalPath);
+                        const assetTypeDir = 'images'; // For <img> tags
+                        let targetName = assetFileName;
+                        let counter = 0;
+                        let newThemePath = `assets/${assetTypeDir}/${targetName}`;
+                        while (usedThemePaths.has(newThemePath)) {
+                          counter++;
+                          targetName = `${path.parse(assetFileName).name}-${counter}${path.parse(assetFileName).ext}`;
+                          newThemePath = `assets/${assetTypeDir}/${targetName}`;
+                        }
+                        usedThemePaths.add(newThemePath);
+                        
+                        globalAssetsToCopy.set(resolvedOriginalPath, newThemePath);
+                        console.log(`INFO: Identified local image for copying: ${resolvedOriginalPath} -> ${newThemePath}. Updating src attribute.`);
+                        src = newThemePath; // Update src to point to the new theme path
+                    }
+                } else if (src) {
+                    console.log(`INFO: Skipping external or data URI image: ${src}`);
+                }
+
+                console.log(`INFO: Converting IMG (src: ${src}) to ${blockName}.`);
                 const attrs = {"id":0,"sizeSlug":"large","linkDestination":"none"}; 
                 console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
                 $element.replaceWith(`<!-- wp:image ${JSON.stringify(attrs)} --><figure class="wp-block-image size-large"><img src="${src}" alt="${alt}"/></figure><!-- /wp:image -->`);
@@ -241,12 +272,12 @@ async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 
                         $element.replaceWith(navLinkBlock);
                     } else {
                         // Fallback for LI in NAV without A: process content, could be plain text or other blocks
-                        const liContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment', true);
+                        const liContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment', true, baseFilePath);
                         $element.replaceWith(liContent); // Replace LI with its processed content directly
                     }
                 } else {
                     blockName = 'wp:list-item';
-                    const listItemContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment'); // navContext is false or default
+                    const listItemContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment', false, baseFilePath);
                     console.log(`DEBUG: Applying to ${blockName}: (content only)`);
                     $element.replaceWith(`<!-- wp:list-item -->${listItemContent}<!-- /wp:list-item -->`);
                 }
@@ -256,15 +287,15 @@ async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 
                 if (navContext) {
                     // This UL/OL is inside a NAV. Its children (LIs) will be processed into nav items.
                     // The UL/OL element itself is replaced by the processed content of its children.
-                    const navListContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment', true);
+                    const navListContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment', true, baseFilePath);
                     $element.replaceWith(navListContent);
                 } else {
                     blockName = 'wp:list';
                     const attrs = {};
                     if ($element.is('ol')) attrs.ordered = true;
                     console.log(`INFO: Converting ${$element.prop('tagName').toUpperCase()} to ${blockName} ${attrs.ordered ? '(ordered)' : ''}.`);
-
-                    const listContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment'); // navContext is false or default
+                    
+                    const listContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment', false, baseFilePath);
                     const attributeString = Object.keys(attrs).length > 0 ? ` ${JSON.stringify(attrs)}` : '';
                     console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
                     $element.replaceWith(`<!-- wp:list${attributeString} -->${listContent}<!-- /wp:list -->`);
@@ -277,7 +308,7 @@ async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 
                 // Attributes for wp:navigation can be extensive (layout, colors, justification, etc.)
                 // For now, we'll create a basic wrapper and process inner content.
                 const navAttrs = {}; // Placeholder for future attribute extraction
-                const navInnerBlocks = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment', true); // Pass navContext = true
+                const navInnerBlocks = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment', true, baseFilePath);
                 const navAttrsString = Object.keys(navAttrs).length > 0 ? ` ${JSON.stringify(navAttrs)}` : '';
                 $element.replaceWith(`<!-- wp:navigation${navAttrsString} -->${navInnerBlocks}<!-- /wp:navigation -->`);
                 processed = true;
@@ -300,7 +331,7 @@ async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 
                     if (bgColorSlug) attrs.backgroundColor = bgColorSlug;
                 }
                 const attributeString = Object.keys(attrs).length > 0 ? ` ${JSON.stringify(attrs)}` : '';
-                const pContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
+                const pContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment', false, baseFilePath);
                 console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
                 $element.replaceWith(`<!-- wp:paragraph${attributeString} -->${pContent}<!-- /wp:paragraph -->`);
                 processed = true;
@@ -324,7 +355,7 @@ async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 
                     if (bgColorSlug) attrs.backgroundColor = bgColorSlug;
                 }
                 const attributeString = ` ${JSON.stringify(attrs)}`;
-                const hContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
+                const hContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment', false, baseFilePath);
                 console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(attrs)}`);
                 $element.replaceWith(`<!-- wp:heading${attributeString} -->${hContent}<!-- /wp:heading -->`);
                 processed = true;
@@ -335,23 +366,40 @@ async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 
                 console.log(`INFO: Converting ${actualTagName.toUpperCase()} (id: ${$element.attr('id') || 'none'}, class: ${$element.attr('class') || 'none'}) to ${blockName}.`);
                 const groupAttrs = { tagName: actualTagName };
                 const styleResults = findElementStyles($element, cssAst);
-                if (styleResults.directStyles && Object.keys(styleResults.directStyles).length > 0) groupAttrs.style = styleResults.directStyles;
-                if (styleResults.generatedClassName) groupAttrs.className = (groupAttrs.className || '') + ` ${styleResults.generatedClassName}`;
+                
+                let newStyleObject = {}; // Initialize a new object for styles
+
+                // Deep copy relevant parts of directStyles if they exist
+                if (styleResults.directStyles) {
+                    if (styleResults.directStyles.spacing) {
+                        newStyleObject.spacing = JSON.parse(JSON.stringify(styleResults.directStyles.spacing));
+                    }
+                    if (styleResults.directStyles.border) {
+                        newStyleObject.border = JSON.parse(JSON.stringify(styleResults.directStyles.border));
+                    }
+                    if (styleResults.directStyles.boxShadow) { // Assuming boxShadow is a simple value
+                        newStyleObject.boxShadow = styleResults.directStyles.boxShadow;
+                    }
+                }
+
+                if (styleResults.generatedClassName) {
+                    groupAttrs.className = styleResults.generatedClassName; // Assign, don't append yet if it's the first
+                }
                 
                 const backgroundColorValue = styleResults.styles['background-color'];
                 if (backgroundColorValue) {
                     const bgColorSlug = mapColorToPaletteSlug(backgroundColorValue, globalThemeJsonData.settings.color.palette);
                     if (bgColorSlug) {
-                        groupAttrs.style = groupAttrs.style || {};
-                        groupAttrs.style.color = groupAttrs.style.color || {};
-                        groupAttrs.style.color.background = bgColorSlug;
+                        console.log(`[[DEBUG_GROUP_COLOR_SET]] Applying bgColorSlug '${bgColorSlug}' to ${actualTagName} '${$element.attr('id') || $element.attr('class') || ''}'`);
+                        newStyleObject.color = newStyleObject.color || {};
+                        newStyleObject.color.background = bgColorSlug;
+                        console.log(`[[DEBUG_GROUP_COLOR_SET_AFTER]] newStyleObject.color for ${actualTagName} '${$element.attr('id') || $element.attr('class') || ''}': ${JSON.stringify(newStyleObject.color)}`);
                     } else { // Not a palette color
                         if (styleResults.generatedClassName) {
                             // findElementStyles created a class, which should cover this non-palette background-color.
-                            // Ensure this class is added to the block.
+                            // Ensure this class is added to groupAttrs.className if not already there from its first assignment.
                             if (groupAttrs.className === undefined || !groupAttrs.className.includes(styleResults.generatedClassName)) {
                                 groupAttrs.className = (groupAttrs.className || '') + ` ${styleResults.generatedClassName}`;
-                                groupAttrs.className = groupAttrs.className.trim();
                             }
                         } else {
                             // No general custom class from findElementStyles exists.
@@ -359,7 +407,6 @@ async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 
                             customClassCounter++;
                             const newBgClassName = `custom-style-${customClassCounter}`;
                             groupAttrs.className = (groupAttrs.className || '') + ` ${newBgClassName}`;
-                            groupAttrs.className = groupAttrs.className.trim();
                             customCssRulesForStyleSheet.push(`.${newBgClassName} { background-color: ${backgroundColorValue}; }`);
                         }
                     }
@@ -368,16 +415,16 @@ async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 
                 if (textColorValue) {
                     const textColorSlug = mapColorToPaletteSlug(textColorValue, globalThemeJsonData.settings.color.palette);
                     if (textColorSlug) {
-                        groupAttrs.style = groupAttrs.style || {};
-                        groupAttrs.style.color = groupAttrs.style.color || {};
-                        groupAttrs.style.color.text = textColorSlug;
+                        console.log(`[[DEBUG_GROUP_COLOR_SET]] Applying textColorSlug '${textColorSlug}' to ${actualTagName} '${$element.attr('id') || $element.attr('class') || ''}'`);
+                        newStyleObject.color = newStyleObject.color || {};
+                        newStyleObject.color.text = textColorSlug;
+                        console.log(`[[DEBUG_GROUP_COLOR_SET_AFTER]] newStyleObject.color for ${actualTagName} '${$element.attr('id') || $element.attr('class') || ''}': ${JSON.stringify(newStyleObject.color)}`);
                     } else { // Not a palette color
                         if (styleResults.generatedClassName) {
                             // findElementStyles created a class, which should cover this non-palette text color.
-                            // Ensure this class is added to the block.
-                            if (groupAttrs.className === undefined || !groupAttrs.className.includes(styleResults.generatedClassName)) {
+                            // Ensure this class is added to groupAttrs.className if not already there.
+                             if (groupAttrs.className === undefined || !groupAttrs.className.includes(styleResults.generatedClassName)) {
                                 groupAttrs.className = (groupAttrs.className || '') + ` ${styleResults.generatedClassName}`;
-                                groupAttrs.className = groupAttrs.className.trim();
                             }
                         } else {
                             // No general custom class from findElementStyles exists.
@@ -392,18 +439,28 @@ async function convertHtmlToBlockSyntax(htmlContentToConvert, cssAst, context = 
                 }
                 if (groupAttrs.className) groupAttrs.className = groupAttrs.className.trim();
 
-                const divContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment');
+                if (groupAttrs.className) groupAttrs.className = groupAttrs.className.trim(); // Ensure trimming happens after all className additions
+
+                if (groupAttrs.className) groupAttrs.className = groupAttrs.className.trim(); // Final trim for className
+
+                const divContent = await convertHtmlToBlockSyntax($element.html(), cssAst, 'fragment', navContext, baseFilePath);
+                
+                // Create the attribute string FIRST, then log it.
                 const groupAttributeString = Object.keys(groupAttrs).length > 0 ? ` ${JSON.stringify(groupAttrs)}` : '';
-                console.log(`DEBUG: Applying to ${blockName}: attributes ${JSON.stringify(groupAttrs)}`);
+                
+                console.log(`[[DEBUG_GROUP_ATTRS_FINAL_STRING]] For ${actualTagName} '${$element.attr('id') || $element.attr('class') || ''}': attributeString = ${groupAttributeString}`);
+                
+                // The old "Applying to" log will now just confirm what was in groupAttributeString
+                console.log(`DEBUG: Applying to ${blockName}: attributes ${groupAttributeString}`); 
                 $element.replaceWith(`<!-- wp:group${groupAttributeString} -->${divContent}<!-- /wp:group -->`);
                 processed = true;
             }
             else if ($element.is('a') &&
                      !$element.parent().is('p, h1, h2, h3, h4, h5, h6, li') &&
-                     !($element.parent().is('li') && $element.parent().parent().is('ul') && $element.parent().parent().parent().is('nav'))) {
+                     !($element.parent().is('li') && $element.parent().parent().is('ul') && $element.parent().parent().parent().is('nav'))) { // Check if parent is li > ul > nav
                 // Exclude <a> tags within a nav structure (nav > ul > li > a) as they'll be handled by 'li' for navs
                 blockName = 'wp:paragraph';
-                const pContent = await convertHtmlToBlockSyntax($.html($element), cssAst, 'fragment');
+                const pContent = await convertHtmlToBlockSyntax($.html($element), cssAst, 'fragment', false, baseFilePath);
                 console.log(`DEBUG: Applying to ${blockName} (wrapping 'a'): (content only)`);
                 $element.replaceWith(`<!-- wp:paragraph -->${pContent}<!-- /wp:paragraph -->`);
                 processed = true;
@@ -475,8 +532,16 @@ function findElementStyles($element, cssAst) {
 
     for (const prop in finalStyles) {
         const value = finalStyles[prop];
-        if (['text-align', 'background-color', 'color'].includes(prop)) {
-            // Handled by main block attribute mapping
+        if (prop === 'background-color' || prop === 'color') {
+            // Check if it's a palette color. If so, it will be handled by block-specific attributes, not a generic custom class.
+            if (mapColorToPaletteSlug(value, globalThemeJsonData.settings.color.palette)) {
+                continue; // Skip adding to trulyUnmappedProperties, will be handled by direct block color attributes
+            }
+            // If not a palette color, it will fall through to the 'else' and be added to trulyUnmappedProperties.
+        }
+        
+        if (['text-align'].includes(prop)) { // text-align is directly mapped for some blocks
+            // Potentially handle or ensure it's still captured if not mapped by a specific block
         } else if (spacingProperties.includes(prop)) {
             const [type, side] = prop.split('-');
             if (type === 'padding') directStyles.spacing.padding[side || 'all'] = value;
@@ -536,7 +601,7 @@ async function processSingleCommonPart(headerOrFooterCandidates, totalFiles, fil
         originalTagName = $rootElement.prop('tagName')?.toLowerCase() || (partType === 'header' ? 'header' : 'footer');
         
         const contentHtml = $rootElement.html();
-        let processedContent = await convertHtmlToBlockSyntax(contentHtml, cssAst, 'fragment');
+        let processedContent = await convertHtmlToBlockSyntax(contentHtml, cssAst, 'fragment', false, null); // navContext=false, baseFilePath=null
 
         const groupAttrs = { tagName: originalTagName, layout: {type: "constrained"} };
         const styleResults = findElementStyles($rootElement, cssAst);
@@ -604,10 +669,123 @@ async function loadAndParseCss(providedCssDir) {
     }
     const result = await postcss().process(combinedCss, { from: undefined });
     console.log('Successfully parsed combined CSS into AST.');
+    
+    const propertiesToCheck = ['background-image', 'background', 'list-style-image', 'border-image', 'content', 'src']; // Added 'src' for @font-face
+
+    // Helper function to process declarations for asset rewriting
+    const processDeclaration = (decl) => {
+        if (!propertiesToCheck.includes(decl.prop) && !(decl.parent.type === 'atrule' && decl.parent.name === 'font-face' && decl.prop === 'src')) {
+            return;
+        }
+
+        const originalValue = decl.value;
+        let modifiedValue = originalValue;
+
+        // More specific regex: url\(["']?([^)"']+)["']?\)
+        // This captures the path without quotes, and handles optional quotes.
+        const urlRegex = /url\((['"]?)([^)'"]+)\1\)/g; // \1 matches the first capturing group (quote type)
+        let match;
+
+        // Loop to handle multiple url() instances in a single declaration value
+        while ((match = urlRegex.exec(originalValue)) !== null) {
+            const fullMatch = match[0]; // e.g., url('../images/foo.png') or url(images/bar.jpg)
+            let extractedPath = match[2].trim(); // e.g., ../images/foo.png or images/bar.jpg
+
+            if (!extractedPath || extractedPath.startsWith('data:') || extractedPath.startsWith('http:') || extractedPath.startsWith('https:') || extractedPath.startsWith('//')) {
+                console.log(`INFO: Skipping external, data URI, or empty CSS asset path: ${extractedPath} in ${decl.prop}`);
+                continue;
+            }
+
+            let resolvedOriginalPath;
+            let cssFileDir;
+
+            if (decl.source && decl.source.input && decl.source.input.file) {
+                cssFileDir = path.dirname(decl.source.input.file || cssDir);
+                if (!decl.source.input.file) {
+                     console.warn(`WARN: Could not reliably determine original CSS file for asset path "${extractedPath}" in property "${decl.prop}". Resolving relative to input CSS directory "${cssDir}".`);
+                }
+                 resolvedOriginalPath = path.resolve(cssFileDir, extractedPath);
+            } else {
+                console.warn(`WARN: Missing source information for asset path "${extractedPath}" in property "${decl.prop}". Resolving relative to input CSS directory "${cssDir}".`);
+                resolvedOriginalPath = path.resolve(cssDir, extractedPath);
+            }
+            
+            const assetFileName = path.basename(resolvedOriginalPath);
+            const assetTypeDir = (decl.parent.type === 'atrule' && decl.parent.name === 'font-face' && decl.prop === 'src') ? 'fonts' : 'images';
+            
+            let targetName = assetFileName;
+            let counter = 0;
+            let newThemePath = `assets/${assetTypeDir}/${targetName}`; // This is relative to theme root
+            while (usedThemePaths.has(newThemePath)) {
+              counter++;
+              targetName = `${path.parse(assetFileName).name}-${counter}${path.parse(assetFileName).ext}`;
+              newThemePath = `assets/${assetTypeDir}/${targetName}`;
+            }
+            usedThemePaths.add(newThemePath);
+
+            if (!globalAssetsToCopy.has(resolvedOriginalPath)) {
+                globalAssetsToCopy.set(resolvedOriginalPath, newThemePath);
+                console.log(`INFO: Identified local CSS asset for copying: ${resolvedOriginalPath} -> ${newThemePath} (from ${decl.prop}: ${originalValue})`);
+            }
+            
+            // Rewrite the path in the declaration's value
+            // Ensure newThemePath is relative to the CSS file for url() context if style.css is in root.
+            // Since our style.css is at the root, newThemePath which is like 'assets/images/file.png' is correct.
+            const replacementUrl = `url('${newThemePath}')`; // Always add quotes for consistency
+            modifiedValue = modifiedValue.replace(fullMatch, replacementUrl);
+            console.log(`INFO: Rewriting CSS url in ${decl.prop}: ${fullMatch} -> ${replacementUrl}`);
+        }
+
+        if (modifiedValue !== originalValue) {
+            decl.value = modifiedValue;
+        }
+    };
+
+    // Process all declarations in the AST (including those not in @keyframes)
+    result.root.walkDecls(processDeclaration);
+
+    // Process declarations within @keyframes rules and then store the stringified rule
+    globalKeyframesRules = []; // Reset before processing
+    result.root.walkAtRules('keyframes', atRuleKeyframes => {
+        atRuleKeyframes.walkDecls(processDeclaration); // Process declarations within this specific keyframe rule
+        globalKeyframesRules.push(atRuleKeyframes.toString());
+    });
+    console.log(`INFO: Found and stored ${globalKeyframesRules.length} @keyframes rules (with paths rewritten).`);
+    
     return result.root;
   } catch (err) {
     console.error('Error loading or parsing CSS:', err.message);
     return null;
+  }
+}
+
+async function copyAssetsToTheme() {
+  if (globalAssetsToCopy.size === 0) {
+    console.log("INFO: No assets identified for copying.");
+    return;
+  }
+  console.log(`INFO: Attempting to copy ${globalAssetsToCopy.size} assets to theme...`);
+  // Ensure baseOutputDir is accessible, e.g., passed as param or global
+  const themeAssetsDir = path.join(baseOutputDir, 'assets'); // General assets dir
+
+  try {
+    await fs.ensureDir(themeAssetsDir); // Ensure base assets/ dir exists
+    // No need to pre-create assets/images and assets/fonts if newThemePath includes them.
+  } catch (err) {
+    console.error("ERROR: Could not create base asset directory:", err.message);
+    return;
+  }
+
+  for (const [resolvedOriginalPath, newThemePath] of globalAssetsToCopy) {
+    const fullTargetPath = path.join(baseOutputDir, newThemePath);
+    try {
+      await fs.ensureDir(path.dirname(fullTargetPath)); // Ensure specific subdir like assets/images exists
+      await fs.copy(resolvedOriginalPath, fullTargetPath);
+      console.log(`INFO: Copied asset: ${resolvedOriginalPath} -> ${fullTargetPath}`);
+    } catch (err) {
+      console.error(`ERROR: Could not copy asset ${resolvedOriginalPath} to ${fullTargetPath}:`, err.message);
+      // Optionally, continue with other assets
+    }
   }
 }
 
@@ -624,24 +802,39 @@ async function main() {
   if (customCssRulesForStyleSheet.length > 0) {
     await appendCustomStylesToStyleCss();
   }
+  await copyAssetsToTheme(); // Add this line
+  console.log("\nConversion process complete."); // Existing log
 }
 
 async function appendCustomStylesToStyleCss() {
-  console.log(`INFO: Appending ${customCssRulesForStyleSheet.length} custom CSS rules to style.css.`);
-  if (customCssRulesForStyleSheet.length === 0) return;
-
   const styleCssPath = path.join(baseOutputDir, 'style.css');
-  const customStylesHeader = "\n\n/* Custom styles from converter */\n";
+  let contentToAppend = ""; // Initialize empty string to build content
+
+  // Handle @keyframes rules
+  if (globalKeyframesRules && globalKeyframesRules.length > 0) {
+    console.log(`INFO: Preparing to append ${globalKeyframesRules.length} @keyframes rules to style.css.`);
+    contentToAppend += "\n\n/* @keyframes rules */\n";
+    contentToAppend += globalKeyframesRules.join("\n\n"); // Add each keyframe rule, separated by a blank line
+    contentToAppend += "\n"; // Add a newline after the block of keyframes
+  }
+
+  // Handle custom style rules
+  if (customCssRulesForStyleSheet && customCssRulesForStyleSheet.length > 0) {
+    console.log(`INFO: Preparing to append ${customCssRulesForStyleSheet.length} custom style rules to style.css.`);
+    contentToAppend += "\n\n/* Custom styles from converter */\n";
+    contentToAppend += customCssRulesForStyleSheet.join("\n"); // Add each custom style rule
+    // contentToAppend += "\n"; // Optional: add a final newline after all custom styles
+  }
+
+  // Only proceed if there's something to append
+  if (contentToAppend === "") {
+    console.log("INFO: No custom styles or keyframes to append to style.css.");
+    return; // Exit if nothing to do
+  }
+
   try {
-    let existingContent = '';
-    try { existingContent = await fs.readFile(styleCssPath, 'utf8'); }
-    catch (readError) { if (readError.code !== 'ENOENT') throw readError; }
-    
-    let contentToAppend = customCssRulesForStyleSheet.join('\n');
-    if (existingContent && !existingContent.endsWith('\n')) contentToAppend = '\n' + contentToAppend;
-    
-    await fs.appendFile(styleCssPath, customStylesHeader + contentToAppend);
-    console.log(`Appended ${customCssRulesForStyleSheet.length} custom style rules to ${styleCssPath}`);
+    await fs.appendFile(styleCssPath, contentToAppend);
+    console.log(`Successfully appended styles and/or keyframes to ${styleCssPath}`);
   } catch (err) {
     console.error('Error appending custom styles to style.css:', err.message);
   }
